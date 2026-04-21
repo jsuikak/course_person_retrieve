@@ -1,0 +1,23 @@
+[project]
+name = "course_person_retrieve"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.2.0",
+    "opencv-python>=4.13.0.92",
+    "scipy>=1.17.1",
+    "tensorboard>=2.20.0",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "tqdm>=4.67.3",
+]
+
+[project.scripts]
+retrieval-cli = "retrieval_cli:main"
+
+[tool.uv.workspace]
+members = [
+    "models/mtcnn_project",
+]
