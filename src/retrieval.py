@@ -11,7 +11,6 @@ from typing import Any
 import cv2
 import numpy as np
 
-from .face_feature_pipeline import FaceFeaturePipeline, FaceFeaturePipelineConfig, FaceFeatureRecord
 from .tools.feature_extractor import FeatureExtractor, FeatureExtractorConfig, FeatureMode
 
 
@@ -127,21 +126,37 @@ def _draw_bbox_with_label(image: np.ndarray, x: int, y: int, w: int, h: int, lab
     return out
 
 
-def _extract_face_query_features(
+def _read_query_image(query_file: Path) -> np.ndarray:
+    query_image = cv2.imread(str(query_file))
+    if query_image is None or query_image.size == 0:
+        raise FileNotFoundError(f"failed to read query image: {query_file}")
+    return query_image
+
+
+def _extract_face_query_feature(
     query_file: Path,
     arcface_weight_path: str,
     device: str,
-) -> tuple[np.ndarray, list[FaceFeatureRecord]]:
-    pipeline = FaceFeaturePipeline(
-        FaceFeaturePipelineConfig(
+) -> tuple[np.ndarray, dict[str, int]]:
+    query_image = _read_query_image(query_file)
+
+    extractor = FeatureExtractor(
+        FeatureExtractorConfig(
             arcface_weight_path=arcface_weight_path,
             device=device,
+            detect_face=False,
+            face_flip_test=True,
         )
     )
-    query_bundle = pipeline.extract_image(image_path=str(query_file), source_name=str(query_file))
-    if len(query_bundle.records) == 0:
-        raise ValueError(f"no face detected in query image: {query_file}")
-    return query_bundle.feature_matrix().astype(np.float32, copy=False), query_bundle.records
+    feat = extractor.extract(FeatureMode.FACE, query_image)
+    if feat is None:
+        raise ValueError(f"failed to extract face feature from query image: {query_file}")
+
+    h, w = query_image.shape[:2]
+    return (
+        feat.reshape(1, -1).astype(np.float32, copy=False),
+        {"x": 0, "y": 0, "w": int(w), "h": int(h)},
+    )
 
 
 def _extract_person_query_feature(
@@ -153,9 +168,7 @@ def _extract_person_query_feature(
     resnet_weight_path: str | None,
     person_input_size: int,
 ) -> np.ndarray:
-    query_image = cv2.imread(str(query_file))
-    if query_image is None or query_image.size == 0:
-        raise FileNotFoundError(f"failed to read query image: {query_file}")
+    query_image = _read_query_image(query_file)
 
     extractor = FeatureExtractor(
         FeatureExtractorConfig(
@@ -194,7 +207,7 @@ def search_query_in_index(
     person_input_size: int = 224,
 ) -> dict[str, Any]:
     """执行最简检索并将结果写入文件夹。"""
-    del yolo_weights, yolo_conf, yolo_iou, yolo_max_det  # 当前检索阶段 query 不做人检测，保留参数用于接口统一。
+    del yolo_weights, yolo_conf, yolo_iou, yolo_max_det  # 当前检索阶段 query 不做人脸/人体检测，保留参数用于接口统一。
 
     resolved_mode = _resolve_feature_mode(feature_mode)
     project_root = Path.cwd()
@@ -225,9 +238,9 @@ def search_query_in_index(
             f"meta rows ({len(meta_rows)}) do not match feature rows ({gallery_features.shape[0]}): {meta_path}"
         )
 
-    query_records: list[FaceFeatureRecord] = []
+    query_face_bbox: dict[str, int] | None = None
     if resolved_mode == FeatureMode.FACE:
-        query_features, query_records = _extract_face_query_features(
+        query_features, query_face_bbox = _extract_face_query_feature(
             query_file=query_file,
             arcface_weight_path=arcface_weight_path,
             device=device,
@@ -316,9 +329,10 @@ def search_query_in_index(
 
         q_i = int(best_query_idx[int(idx)])
         if resolved_mode == FeatureMode.FACE:
-            q_box = query_records[q_i].bbox
             item["matched_query_face_index"] = q_i
-            item["matched_query_bbox"] = {"x": int(q_box.x), "y": int(q_box.y), "w": int(q_box.w), "h": int(q_box.h)}
+            item["matched_query_source"] = "whole_image"
+            if query_face_bbox is not None:
+                item["matched_query_bbox"] = dict(query_face_bbox)
         else:
             item["matched_query_person_index"] = 0
             item["matched_query_source"] = "whole_image"
