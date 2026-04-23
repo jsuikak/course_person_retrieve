@@ -100,6 +100,29 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(kwargs["prefix"], "demo_idx")
             self.assertEqual(kwargs["sample_fps"], 2.0)
 
+    def test_rebuild_gallery_index_missing_dependency_returns_400(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            gallery_dir = tmp_dir / "gallery"
+            gallery_dir.mkdir(parents=True, exist_ok=True)
+            (gallery_dir / "a.jpg").write_bytes(b"a")
+
+            with mock.patch(
+                "src.app.backend.services.build_feature_index",
+                side_effect=ImportError("ultralytics is required for YOLOPersonDetector"),
+            ):
+                resp = self.client.post(
+                    "/api/admin/rebuild-gallery-index",
+                    json={
+                        "gallery_path": str(gallery_dir),
+                        "feature_mode": "person",
+                        "index_name": "demo_idx",
+                    },
+                )
+
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("ultralytics", resp.json()["detail"])
+
     def test_search_gallery_auto_build_branch_and_url_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)

@@ -97,7 +97,7 @@ uv run python -m src.app_retrieval \
 ### 4) 启动 Web 页面
 
 ```bash
-uv run uvicorn src.app.backend.app:app --reload --host 127.0.0.1 --port 8000
+uv run python -m uvicorn src.app.backend.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
 浏览器访问：`http://127.0.0.1:8000`
@@ -107,6 +107,8 @@ uv run uvicorn src.app.backend.app:app --reload --host 127.0.0.1 --port 8000
 ```bash
 python3 -m uvicorn src.app.backend.app:app --reload --host 127.0.0.1 --port 8000
 ```
+
+说明：优先使用 `uv run python -m uvicorn ...`，可避免 `uv run uvicorn ...` 误调用系统 Python 导致依赖不一致。
 
 停止服务：终端按 `Ctrl + C`
 

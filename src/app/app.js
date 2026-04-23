@@ -116,6 +116,11 @@ function readFormAsObject(form) {
 
 function renderStatus(data) {
   const items = [
+    ["运行解释器", data?.runtime?.python_executable ?? "unknown"],
+    [
+      "运行依赖(ultralytics/uvicorn)",
+      `${data?.runtime?.ultralytics_importable ? "ok" : "missing"}/${data?.runtime?.uvicorn_importable ? "ok" : "missing"}`,
+    ],
     ["ArcFace 权重", data?.weights?.arcface?.exists ? "存在" : "缺失"],
     ["YOLO 默认权重", data?.weights?.yolo_default?.exists ? "存在" : "缺失"],
     ["图像索引(face/person)", `${data?.indexes?.image?.face_count ?? 0}/${data?.indexes?.image?.person_count ?? 0}`],

@@ -49,6 +49,11 @@ async def value_error_handler(_, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.exception_handler(ImportError)
+async def import_error_handler(_, exc: ImportError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 @app.exception_handler(FileNotFoundError)
 async def file_not_found_handler(_, exc: FileNotFoundError) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})

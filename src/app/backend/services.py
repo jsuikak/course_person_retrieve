@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import re
 import shutil
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -236,8 +238,21 @@ def _count_indexes(index_dir: Path, mode: str) -> int:
     return len(list(index_dir.glob(pattern))) if index_dir.exists() else 0
 
 
+def _is_module_importable(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return False
+
+
 def get_status() -> dict[str, Any]:
     return {
+        "runtime": {
+            "python_executable": sys.executable,
+            "python_version": sys.version.split()[0],
+            "ultralytics_importable": _is_module_importable("ultralytics"),
+            "uvicorn_importable": _is_module_importable("uvicorn"),
+        },
         "weights": {
             "arcface": {
                 "path": str(ARCFACE_WEIGHTS),
