@@ -1,158 +1,110 @@
-# ArcFace 人脸检索
+# 人脸检索（当前项目结构）
 
-详细实现文档：`docs/IMPLEMENTATION.md`
+本项目当前采用 `src/` 下的函数式接口，支持：
 
-本项目实现了统一的人脸检索框架，支持：
+1. 图像库检索（query image -> image gallery）
+2. 视频库检索（query image -> video gallery）
+3. 应用级流程：建索引（存在则跳过）+ 检索一体化执行
 
-1. 图像库检索（image -> image）
-2. 视频库检索（image -> video）
-
-核心策略：
+核心实现：
 
 - ArcFace 512 维特征
-- 余弦相似度 + NumPy 精确检索
-- 可选质量过滤（模糊度阈值、最小人脸尺寸）
-- 可选 flip test（原图 + 水平翻转）
-- 视频端采用 `1 fps 采样 + IoU 轨迹关联 + mean(top3) 轨迹打分 + max 视频聚合`
+- MTCNN 人脸检测
+- NumPy 余弦相似度 TopK 匹配
+- 检索输出包含：命中裁剪图 + 原图叠框标注图
 
 ## 环境安装
 
-```sh
+```bash
 uv sync
 ```
-cpu就可以运行
 
-## 目录结构
+## 当前推荐入口
 
-- `retrieval/feature_extractor.py`：ArcFace 特征提取层
-- `retrieval/image_index.py`：图像索引构建与检索
-- `retrieval/video_index.py`：视频索引构建与检索
-- `retrieval/video_annotator.py`：视频逐帧检索可视化（框+姓名+置信度）
-- `retrieval/evaluation.py`：Recall@K / mAP 评估与消融实验
-- `retrieval_cli.py`：统一 CLI 入口
+1. 应用级流程入口（推荐）
+   - `python3 -m src.app_retrieval ...`
+   - 代码：`src/app_retrieval.py`
+2. 检索函数入口
+   - `search_query_in_index(...)`
+   - 代码：`src/retrieval.py`
 
-## Manifest 格式
+## 运行目录规范
 
-### 图像 manifest（gallery 或 query）
-
-CSV 至少包含：`image_path`
-
-可选列：
-
-- `image_id`
-- `identity`（评估 mAP/Recall 时建议提供）
-- `x,y,w,h`（已知人脸框，可加速并提升稳定性）
-
-示例：
-
-```csv
-image_path,image_id,identity,x,y,w,h
-/path/to/a.jpg,a,p001,34,42,98,98
-/path/to/b.jpg,b,p002,,,,
-```
-
-### 视频 manifest
-
-CSV 至少包含：`video_path`
-
-可选列：
-
-- `video_id`
-- `identity`（用于视频检索评估）
-
-示例：
-
-```csv
-video_path,video_id,identity
-/path/to/v1.mp4,v1,p001
-/path/to/v2.mp4,v2,p002
-```
-
-## CLI 用法
-
-默认权重路径：`./models/weights/arcface.pt`
-
-### 1) 构建图像索引
+先创建运行目录：
 
 ```bash
-python retrieval_cli.py build-image-index \
-  --manifest ./data/gallery_manifest.csv \
-  --index-dir ./outputs/image_index \
-  --weights ./models/weights/arcface.pt \
-  --device cpu \
-  --flip-test \
-  --blur-threshold 100 \
-  --min-face-size 32
+python3 scripts/create_runtime_folders.py --project-root .
 ```
 
-输出：`features.npy`、`meta.csv`、`index_info.json`
+规范详见：`docs/运行时文件夹结构说明.md`
 
-### 2) 图像检索
+最小目录结构：
+
+```text
+data_runtime/
+  query/
+  gallery/
+    images/
+    videos/
+indexes/
+  image_index/
+  video_index/
+outputs/
+  retrieval/
+  annotate/
+```
+
+## 快速运行
+
+默认权重：`./models/weights/arcface.pt`
+
+### 1) 图像库检索（自动建索引或跳过）
 
 ```bash
-python retrieval_cli.py search-image \
-  --query ./data/query.jpg \
-  --index-dir ./outputs/image_index \
-  --weights ./models/weights/arcface.pt \
+python3 -m src.app_retrieval \
+  --query data_runtime/query/ikura.jpg \
+  --gallery data_runtime/gallery/images/yoasobi_TFT \
   --topk 5 \
-  --threshold 0.3
+  --weights ./models/weights/arcface.pt \
+  --device cpu
 ```
 
-### 3) 构建视频索引
+### 2) 视频库检索（自动写入 `indexes/video_index`）
 
 ```bash
-python retrieval_cli.py build-video-index \
-  --manifest ./data/video_manifest.csv \
-  --index-dir ./outputs/video_index \
-  --weights ./models/weights/arcface.pt \
-  --detect-face \
-  --sample-fps 1.0 \
-  --iou-threshold 0.3
-```
-
-### 4) 视频检索
-
-```bash
-python retrieval_cli.py search-video \
-  --query ./data/query.jpg \
-  --index-dir ./outputs/video_index \
-  --weights ./models/weights/arcface.pt \
-  --detect-face \
+python3 -m src.app_retrieval \
+  --query data_runtime/query/Tim1.png \
+  --gallery data_runtime/gallery/videos/egodeath \
   --topk 5 \
-  --threshold 0.3
-```
-
-### 5) 视频标注输出（MTCNN 检测 + 检索姓名与置信度）
-
-```bash
-python retrieval_cli.py annotate-video \
-  --video ./data/yoasobi_TFT/short.mp4 \
-  --output-video ./outputs/yoasobi_tft/results/short_annotated.mp4 \
-  --index-dir ./outputs/yoasobi_tft/indexes/image_index \
   --weights ./models/weights/arcface.pt \
-  --device cpu \
-  --detect-face \
-  --threshold 0.3
+  --device cpu
 ```
 
-### 6) 四组固定消融实验
+## 输出说明
 
-```bash
-python retrieval_cli.py evaluate \
-  --gallery-manifest ./data/gallery_manifest.csv \
-  --query-manifest ./data/query_manifest.csv \
-  --video-manifest ./data/video_manifest.csv \
-  --output-dir ./outputs/eval \
-  --weights ./models/weights/arcface.pt \
-  --device cpu \
-  --detect-face
-```
+每次检索输出目录：
 
-输出：`./outputs/eval/ablation_results.csv`
+`outputs/retrieval/<query文件名>-<索引名>/`
 
-实验固定为：
+包含：
 
-1. Baseline（单特征）
-2. +Quality Filter
-3. +Flip Test
-4. +Video Track Aggregation
+1. `results.json`：TopK 结果、分数、来源路径、bbox、输出路径
+2. `crops/`：命中框裁剪图
+3. `annotated/`：原尺寸图叠框，框上标注 query 名称
+
+索引文件位于：
+
+1. 图像库：`indexes/image_index/<index_name>_{features,meta,info}.*`
+2. 视频库：`indexes/video_index/<index_name>_{features,meta,info}.*`
+
+其中 `meta.csv` 包含 `x,y,w,h`、`source_name`、`frame_index`、`face_index`，可用于回溯命中位置。
+
+## 文档索引
+
+1. `docs/检索流程接口说明.md`
+2. `docs/最简检索接口说明.md`
+3. `docs/运行时文件夹结构说明.md`
+4. `docs/人脸特征提取流程接口说明.md`
+5. `docs/统一特征提取接口说明.md`
+6. `docs/统一特征匹配接口说明.md`
+7. `docs/MTCNN检测接口说明.md`
