@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.face_index_builder import build_face_feature_index
+from src.face_index_builder import build_feature_index
 from src.retrieval import search_query_in_index
+from src.tools.feature_extractor import FeatureMode
 
 
 def _default_index_name(gallery_path: str) -> str:
@@ -45,17 +46,27 @@ def _resolve_gallery_type(gallery_path: str) -> str:
     raise FileNotFoundError(f"gallery path not found: {gallery_path}")
 
 
-def _index_paths(index_name: str, index_dir: str) -> dict[str, str]:
+def _resolve_feature_mode(feature_mode: FeatureMode | str) -> FeatureMode:
+    if isinstance(feature_mode, FeatureMode):
+        return feature_mode
+    try:
+        return FeatureMode(str(feature_mode).strip().lower())
+    except Exception as exc:
+        raise ValueError(f"unsupported feature_mode: {feature_mode}") from exc
+
+
+def _index_paths(index_name: str, index_dir: str, feature_mode: FeatureMode) -> dict[str, str]:
+    suffix = f"{index_name}_{feature_mode.value}"
     d = Path(index_dir)
     return {
-        "features_path": str(d / f"{index_name}_features.npy"),
-        "meta_path": str(d / f"{index_name}_meta.csv"),
-        "info_path": str(d / f"{index_name}_info.json"),
+        "features_path": str(d / f"{suffix}_features.npy"),
+        "meta_path": str(d / f"{suffix}_meta.csv"),
+        "info_path": str(d / f"{suffix}_info.json"),
     }
 
 
-def _index_exists(index_name: str, index_dir: str) -> bool:
-    p = _index_paths(index_name=index_name, index_dir=index_dir)
+def _index_exists(index_name: str, index_dir: str, feature_mode: FeatureMode) -> bool:
+    p = _index_paths(index_name=index_name, index_dir=index_dir, feature_mode=feature_mode)
     return all(Path(v).exists() for v in p.values())
 
 
@@ -68,6 +79,16 @@ def run_app_retrieval_flow(
     device: str = "cpu",
     indexes_root: str = "indexes",
     retrieval_output_root: str = "outputs/retrieval",
+    feature_mode: FeatureMode | str = FeatureMode.FACE,
+    sample_fps: float = 1.0,
+    yolo_weights: str = "./models/weights/yolo11n.pt",
+    yolo_conf: float = 0.25,
+    yolo_iou: float = 0.7,
+    yolo_max_det: int = 100,
+    resnet_backbone: str = "resnet50",
+    resnet_pretrained: bool = False,
+    resnet_weight_path: str | None = None,
+    person_input_size: int = 224,
 ) -> dict[str, Any]:
     """应用级流程：
 
@@ -79,35 +100,48 @@ def run_app_retrieval_flow(
     if not resolved_index_name:
         raise ValueError("index_name is empty after resolving.")
     library_type = _resolve_gallery_type(gallery_path)
+    resolved_mode = _resolve_feature_mode(feature_mode)
 
     index_subdir = "image_index" if library_type == "image" else "video_index"
     index_dir = str(Path(indexes_root) / index_subdir)
-    index_file_paths = _index_paths(index_name=resolved_index_name, index_dir=index_dir)
+    index_file_paths = _index_paths(index_name=resolved_index_name, index_dir=index_dir, feature_mode=resolved_mode)
 
     build_summary: dict[str, Any]
-    if _index_exists(index_name=resolved_index_name, index_dir=index_dir):
+    if _index_exists(index_name=resolved_index_name, index_dir=index_dir, feature_mode=resolved_mode):
         build_summary = {
             "status": "skipped",
             "reason": "index already exists",
             "index_name": resolved_index_name,
+            "feature_mode": resolved_mode.value,
             "index_dir": index_dir,
             "index_paths": index_file_paths,
         }
     else:
-        result = build_face_feature_index(
+        result = build_feature_index(
             library_path=gallery_path,
             output_dir=index_dir,
             arcface_weight_path=arcface_weight_path,
+            feature_mode=resolved_mode,
             library_type=library_type,
             prefix=resolved_index_name,
             device=device,
+            sample_fps=sample_fps,
+            yolo_weights=yolo_weights,
+            yolo_conf=yolo_conf,
+            yolo_iou=yolo_iou,
+            yolo_max_det=yolo_max_det,
+            resnet_backbone=resnet_backbone,
+            resnet_pretrained=resnet_pretrained,
+            resnet_weight_path=resnet_weight_path,
+            person_input_size=person_input_size,
         )
         build_summary = {
             "status": "built",
             "index_name": resolved_index_name,
+            "feature_mode": resolved_mode.value,
             "index_dir": index_dir,
             "index_paths": index_file_paths,
-            "total_faces": result.total_faces,
+            "total_items": result.total_items,
             "feature_dim": result.feature_dim,
         }
 
@@ -119,12 +153,22 @@ def run_app_retrieval_flow(
         device=device,
         indexes_root=index_dir,
         retrieval_output_root=retrieval_output_root,
+        feature_mode=resolved_mode,
+        yolo_weights=yolo_weights,
+        yolo_conf=yolo_conf,
+        yolo_iou=yolo_iou,
+        yolo_max_det=yolo_max_det,
+        resnet_backbone=resnet_backbone,
+        resnet_pretrained=resnet_pretrained,
+        resnet_weight_path=resnet_weight_path,
+        person_input_size=person_input_size,
     )
 
     return {
         "query_path": query_path,
         "gallery_path": gallery_path,
         "library_type": library_type,
+        "feature_mode": resolved_mode.value,
         "index_name": resolved_index_name,
         "build": build_summary,
         "retrieval": retrieval_summary,
@@ -141,6 +185,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="cpu")
     p.add_argument("--indexes-root", default="indexes")
     p.add_argument("--retrieval-output-root", default="outputs/retrieval")
+    p.add_argument("--feature-mode", choices=["face", "person"], default="face")
+    p.add_argument("--sample-fps", type=float, default=1.0)
+    p.add_argument("--yolo-weights", default="./models/weights/yolo11n.pt")
+    p.add_argument("--yolo-conf", type=float, default=0.25)
+    p.add_argument("--yolo-iou", type=float, default=0.7)
+    p.add_argument("--yolo-max-det", type=int, default=100)
+    p.add_argument("--resnet-backbone", default="resnet50", choices=["resnet18", "resnet34", "resnet50"])
+    p.add_argument("--resnet-pretrained", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--resnet-weight-path", default=None)
+    p.add_argument("--person-input-size", type=int, default=224)
     return p
 
 
@@ -155,6 +209,16 @@ def main() -> None:
         device=args.device,
         indexes_root=args.indexes_root,
         retrieval_output_root=args.retrieval_output_root,
+        feature_mode=args.feature_mode,
+        sample_fps=args.sample_fps,
+        yolo_weights=args.yolo_weights,
+        yolo_conf=args.yolo_conf,
+        yolo_iou=args.yolo_iou,
+        yolo_max_det=args.yolo_max_det,
+        resnet_backbone=args.resnet_backbone,
+        resnet_pretrained=args.resnet_pretrained,
+        resnet_weight_path=args.resnet_weight_path,
+        person_input_size=args.person_input_size,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>课程人物检索系统</title>
+    <link rel="stylesheet" href="/frontend/styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="container header-row">
+        <div>
+          <h1>课程人物检索系统</h1>
+          <p class="subtitle">基于新接口（face/person）重构版</p>
+        </div>
+        <div class="status-dock" id="statusDock">
+          <button
+            class="secondary status-trigger"
+            id="statusTrigger"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="statusPopover"
+          >
+            系统状态
+          </button>
+          <div class="status-popover" id="statusPopover" role="dialog" aria-label="系统状态">
+            <div class="status-popover-head">
+              <h2>系统状态</h2>
+              <button class="secondary" id="refreshStatusBtn" type="button">刷新状态</button>
+            </div>
+            <div class="status-grid" id="statusGrid"></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="container page-grid">
+      <section class="panel">
+        <h2>手动构建索引</h2>
+        <form id="rebuildForm" class="form-grid">
+          <label>
+            <span>图库路径</span>
+            <input name="gallery_path" type="text" value="data_runtime/gallery/images/yoasobi_TFT" required />
+          </label>
+          <label>
+            <span>特征模式</span>
+            <select name="feature_mode">
+              <option value="face">face</option>
+              <option value="person">person</option>
+            </select>
+          </label>
+          <label>
+            <span>索引名（可选）</span>
+            <input name="index_name" type="text" placeholder="默认按图库名" />
+          </label>
+          <label>
+            <span>采样 FPS（视频库）</span>
+            <input name="sample_fps" type="number" min="0.1" step="0.1" value="1.0" />
+          </label>
+          <button class="primary" type="submit">构建索引</button>
+          <p class="message" id="rebuildMessage"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="tab-header">
+          <h2>检索任务</h2>
+          <div class="tab-switch" role="tablist" aria-label="检索方式切换">
+            <button
+              id="tabBtnGallery"
+              class="tab-btn is-active"
+              type="button"
+              role="tab"
+              aria-controls="tabPaneGallery"
+              aria-selected="true"
+              data-tab="gallery"
+            >
+              图片检索图库
+            </button>
+            <button
+              id="tabBtnVideo"
+              class="tab-btn"
+              type="button"
+              role="tab"
+              aria-controls="tabPaneVideo"
+              aria-selected="false"
+              data-tab="video"
+            >
+              图片检索上传视频
+            </button>
+          </div>
+        </div>
+
+        <div id="tabPaneGallery" class="tab-pane is-active" role="tabpanel" aria-labelledby="tabBtnGallery">
+          <form id="gallerySearchForm" class="form-grid">
+            <label>
+              <span>查询图片</span>
+              <input name="query" type="file" accept="image/*" required />
+            </label>
+            <label>
+              <span>图库路径</span>
+              <input name="gallery_path" type="text" value="data_runtime/gallery/images/yoasobi_TFT" required />
+            </label>
+            <label>
+              <span>特征模式</span>
+              <select name="feature_mode">
+                <option value="face">face</option>
+                <option value="person">person</option>
+              </select>
+            </label>
+            <label>
+              <span>索引名（可选）</span>
+              <input name="index_name" type="text" placeholder="默认按图库名" />
+            </label>
+            <label>
+              <span>Top-K</span>
+              <input name="topk" type="number" min="1" max="100" value="5" />
+            </label>
+            <label>
+              <span>采样 FPS（视频库）</span>
+              <input name="sample_fps" type="number" min="0.1" step="0.1" value="1.0" />
+            </label>
+            <button class="primary" type="submit">开始检索</button>
+            <p class="message" id="galleryMessage"></p>
+          </form>
+        </div>
+
+        <div id="tabPaneVideo" class="tab-pane" role="tabpanel" aria-labelledby="tabBtnVideo" hidden>
+          <form id="videoSearchForm" class="form-grid">
+            <label>
+              <span>查询图片</span>
+              <input name="query" type="file" accept="image/*" required />
+            </label>
+            <label>
+              <span>视频文件</span>
+              <input name="video" type="file" accept="video/*" required />
+            </label>
+            <label>
+              <span>特征模式</span>
+              <select name="feature_mode">
+                <option value="face">face</option>
+                <option value="person">person</option>
+              </select>
+            </label>
+            <label>
+              <span>索引名（可选）</span>
+              <input name="index_name" type="text" placeholder="默认按视频名" />
+            </label>
+            <label>
+              <span>Top-K</span>
+              <input name="topk" type="number" min="1" max="100" value="5" />
+            </label>
+            <label>
+              <span>采样 FPS</span>
+              <input name="sample_fps" type="number" min="0.1" step="0.1" value="1.0" />
+            </label>
+            <button class="primary" type="submit">开始视频检索</button>
+            <p class="message" id="videoMessage"></p>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="result-header">
+          <h2>检索结果</h2>
+          <button class="secondary" id="clearOutputsBtn" type="button">清理 Web 临时输出</button>
+        </div>
+        <div id="resultSummary" class="result-summary">等待操作</div>
+        <div id="queryPreview" class="query-preview"></div>
+        <div id="resultGrid" class="result-grid"></div>
+      </section>
+    </main>
+
+    <script src="/frontend/app.js" defer></script>
+  </body>
+</html>

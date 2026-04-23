@@ -1,4 +1,4 @@
-"""最简检索接口：query + 索引名 -> TopK 结果落盘。"""
+"""最简检索接口：query + 索引名 -> TopK 结果落盘（face/person 共用）。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,17 @@ from typing import Any
 import cv2
 import numpy as np
 
-from .face_feature_pipeline import FaceFeaturePipeline, FaceFeaturePipelineConfig
+from .face_feature_pipeline import FaceFeaturePipeline, FaceFeaturePipelineConfig, FaceFeatureRecord
+from .tools.feature_extractor import FeatureExtractor, FeatureExtractorConfig, FeatureMode
+
+
+def _resolve_feature_mode(feature_mode: FeatureMode | str) -> FeatureMode:
+    if isinstance(feature_mode, FeatureMode):
+        return feature_mode
+    try:
+        return FeatureMode(str(feature_mode).strip().lower())
+    except Exception as exc:
+        raise ValueError(f"Unsupported feature_mode: {feature_mode}") from exc
 
 
 def _l2_normalize_rows(mat: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -33,18 +43,22 @@ def _to_int(value: Any, default: int) -> int:
         return default
 
 
-def _find_index_files(index_name: str, indexes_root: str) -> tuple[Path, Path, str]:
+def _find_index_files(index_name: str, indexes_root: str, feature_mode: FeatureMode) -> tuple[Path, Path, str]:
     root = Path(indexes_root)
     if not root.exists():
         raise FileNotFoundError(f"indexes root not found: {indexes_root}")
 
     key = Path(index_name).stem
-    candidates = sorted(root.rglob(f"{key}_features.npy"))
+    pattern = f"{key}_{feature_mode.value}_features.npy"
+    candidates = sorted(root.rglob(pattern))
     if not candidates:
-        raise FileNotFoundError(f"index not found for name={index_name}. expected: **/{key}_features.npy under {indexes_root}")
+        raise FileNotFoundError(
+            f"index not found for name={index_name}, mode={feature_mode.value}. "
+            f"expected: **/{pattern} under {indexes_root}"
+        )
     if len(candidates) > 1:
         joined = ", ".join(str(p) for p in candidates)
-        raise ValueError(f"multiple index files match name={index_name}: {joined}")
+        raise ValueError(f"multiple index files match name={index_name}, mode={feature_mode.value}: {joined}")
 
     features_path = candidates[0]
     meta_path = features_path.with_name(features_path.name.replace("_features.npy", "_meta.csv"))
@@ -113,43 +127,11 @@ def _draw_bbox_with_label(image: np.ndarray, x: int, y: int, w: int, h: int, lab
     return out
 
 
-def search_query_in_index(
-    query_path: str,
-    index_name: str,
-    topk: int = 5,
-    arcface_weight_path: str = "./models/weights/arcface.pt",
-    device: str = "cpu",
-    indexes_root: str = "indexes",
-    retrieval_output_root: str = "outputs/retrieval",
-) -> dict[str, Any]:
-    """执行最简检索并将结果写入文件夹。
-
-    输入：
-    1. query_path: 查询图片路径。
-    2. index_name: 索引名（按库名，程序在 indexes_root 下查找 <index_name>_features.npy）。
-
-    输出目录：
-    outputs/retrieval/<query文件名>-<库名>/
-    """
-    project_root = Path.cwd()
-    query_file = Path(query_path)
-    if not query_file.exists():
-        query_file = project_root / query_file
-    if not query_file.exists():
-        raise FileNotFoundError(f"query file not found: {query_path}")
-
-    features_path, meta_path, library_name = _find_index_files(index_name=index_name, indexes_root=indexes_root)
-    gallery_features = np.load(features_path).astype(np.float32, copy=False)
-    if gallery_features.ndim != 2:
-        raise ValueError(f"invalid gallery feature matrix shape: {gallery_features.shape}")
-
-    with meta_path.open("r", newline="", encoding="utf-8") as f:
-        meta_rows = list(csv.DictReader(f))
-    if len(meta_rows) != gallery_features.shape[0]:
-        raise ValueError(
-            f"meta rows ({len(meta_rows)}) do not match feature rows ({gallery_features.shape[0]}): {meta_path}"
-        )
-
+def _extract_face_query_features(
+    query_file: Path,
+    arcface_weight_path: str,
+    device: str,
+) -> tuple[np.ndarray, list[FaceFeatureRecord]]:
     pipeline = FaceFeaturePipeline(
         FaceFeaturePipelineConfig(
             arcface_weight_path=arcface_weight_path,
@@ -159,19 +141,122 @@ def search_query_in_index(
     query_bundle = pipeline.extract_image(image_path=str(query_file), source_name=str(query_file))
     if len(query_bundle.records) == 0:
         raise ValueError(f"no face detected in query image: {query_file}")
-    query_features = query_bundle.feature_matrix().astype(np.float32, copy=False)
+    return query_bundle.feature_matrix().astype(np.float32, copy=False), query_bundle.records
+
+
+def _extract_person_query_feature(
+    query_file: Path,
+    arcface_weight_path: str,
+    device: str,
+    resnet_backbone: str,
+    resnet_pretrained: bool,
+    resnet_weight_path: str | None,
+    person_input_size: int,
+) -> np.ndarray:
+    query_image = cv2.imread(str(query_file))
+    if query_image is None or query_image.size == 0:
+        raise FileNotFoundError(f"failed to read query image: {query_file}")
+
+    extractor = FeatureExtractor(
+        FeatureExtractorConfig(
+            arcface_weight_path=arcface_weight_path,
+            device=device,
+            detect_face=False,
+            face_flip_test=False,
+            resnet_backbone=resnet_backbone,
+            resnet_pretrained=resnet_pretrained,
+            resnet_weight_path=resnet_weight_path,
+            person_input_size=person_input_size,
+        )
+    )
+    feat = extractor.extract(FeatureMode.PERSON, query_image)
+    if feat is None:
+        raise ValueError(f"failed to extract person feature from query image: {query_file}")
+    return feat.reshape(1, -1).astype(np.float32, copy=False)
+
+
+def search_query_in_index(
+    query_path: str,
+    index_name: str,
+    topk: int = 5,
+    arcface_weight_path: str = "./models/weights/arcface.pt",
+    device: str = "cpu",
+    indexes_root: str = "indexes",
+    retrieval_output_root: str = "outputs/retrieval",
+    feature_mode: FeatureMode | str = FeatureMode.FACE,
+    yolo_weights: str = "./models/weights/yolo11n.pt",
+    yolo_conf: float = 0.25,
+    yolo_iou: float = 0.7,
+    yolo_max_det: int = 100,
+    resnet_backbone: str = "resnet50",
+    resnet_pretrained: bool = False,
+    resnet_weight_path: str | None = None,
+    person_input_size: int = 224,
+) -> dict[str, Any]:
+    """执行最简检索并将结果写入文件夹。"""
+    del yolo_weights, yolo_conf, yolo_iou, yolo_max_det  # 当前检索阶段 query 不做人检测，保留参数用于接口统一。
+
+    resolved_mode = _resolve_feature_mode(feature_mode)
+    project_root = Path.cwd()
+    query_file = Path(query_path)
+    if not query_file.exists():
+        query_file = project_root / query_file
+    if not query_file.exists():
+        raise FileNotFoundError(f"query file not found: {query_path}")
+
+    features_path, meta_path, library_name = _find_index_files(
+        index_name=index_name,
+        indexes_root=indexes_root,
+        feature_mode=resolved_mode,
+    )
+    gallery_features = np.load(features_path).astype(np.float32, copy=False)
+    if gallery_features.ndim != 2:
+        raise ValueError(f"invalid gallery feature matrix shape: {gallery_features.shape}")
+    if gallery_features.shape[0] == 0 or gallery_features.shape[1] == 0:
+        raise ValueError(
+            f"index contains no valid features: {features_path}. "
+            "Please rebuild the index with valid detections."
+        )
+
+    with meta_path.open("r", newline="", encoding="utf-8") as f:
+        meta_rows = list(csv.DictReader(f))
+    if len(meta_rows) != gallery_features.shape[0]:
+        raise ValueError(
+            f"meta rows ({len(meta_rows)}) do not match feature rows ({gallery_features.shape[0]}): {meta_path}"
+        )
+
+    query_records: list[FaceFeatureRecord] = []
+    if resolved_mode == FeatureMode.FACE:
+        query_features, query_records = _extract_face_query_features(
+            query_file=query_file,
+            arcface_weight_path=arcface_weight_path,
+            device=device,
+        )
+    else:
+        query_features = _extract_person_query_feature(
+            query_file=query_file,
+            arcface_weight_path=arcface_weight_path,
+            device=device,
+            resnet_backbone=resnet_backbone,
+            resnet_pretrained=resnet_pretrained,
+            resnet_weight_path=resnet_weight_path,
+            person_input_size=person_input_size,
+        )
 
     gallery_norm = _l2_normalize_rows(gallery_features)
     query_norm = _l2_normalize_rows(query_features)
-    scores_matrix = gallery_norm @ query_norm.T
-
-    best_query_idx = np.argmax(scores_matrix, axis=1)
-    best_scores = scores_matrix[np.arange(scores_matrix.shape[0]), best_query_idx]
+    if resolved_mode == FeatureMode.FACE:
+        scores_matrix = gallery_norm @ query_norm.T
+        best_query_idx = np.argmax(scores_matrix, axis=1)
+        best_scores = scores_matrix[np.arange(scores_matrix.shape[0]), best_query_idx]
+    else:
+        best_scores = gallery_norm @ query_norm[0]
+        best_query_idx = np.zeros((gallery_norm.shape[0],), dtype=np.int64)
 
     k = max(1, min(int(topk), gallery_features.shape[0]))
     top_indices = np.argsort(-best_scores)[:k]
 
-    output_dir = Path(retrieval_output_root) / f"{query_file.stem}-{library_name}"
+    output_dir = Path(retrieval_output_root) / f"{query_file.stem}-{library_name}-{resolved_mode.value}"
     crops_dir = output_dir / "crops"
     annotated_dir = output_dir / "annotated"
     if output_dir.exists():
@@ -189,6 +274,7 @@ def search_query_in_index(
         source_name = row.get("source_name", "")
         frame_index = _to_int(row.get("frame_index"), -1)
         face_index = _to_int(row.get("face_index"), -1)
+        person_index = _to_int(row.get("person_index"), -1)
         x = _to_int(row.get("x"), 0)
         y = _to_int(row.get("y"), 0)
         w = _to_int(row.get("w"), 0)
@@ -201,7 +287,10 @@ def search_query_in_index(
         if crop.size == 0:
             crop = source_image
 
-        annotated = _draw_bbox_with_label(source_image, x=x, y=y, w=w, h=h, label=query_label)
+        if w > 0 and h > 0:
+            annotated = _draw_bbox_with_label(source_image, x=x, y=y, w=w, h=h, label=query_label)
+        else:
+            annotated = source_image.copy()
 
         stem = f"rank{rank:02d}_row{int(idx):06d}"
         crop_path = crops_dir / f"{stem}.jpg"
@@ -211,44 +300,62 @@ def search_query_in_index(
         if not cv2.imwrite(str(annotated_path), annotated):
             raise RuntimeError(f"failed to write annotated image: {annotated_path}")
 
+        item: dict[str, Any] = {
+            "rank": rank,
+            "row_index": int(idx),
+            "score": float(best_scores[int(idx)]),
+            "source_type": source_type,
+            "source_name": source_name,
+            "frame_index": frame_index,
+            "face_index": face_index,
+            "person_index": person_index,
+            "bbox": {"x": x, "y": y, "w": w, "h": h},
+            "crop_path": str(crop_path),
+            "annotated_path": str(annotated_path),
+        }
+
         q_i = int(best_query_idx[int(idx)])
-        q_box = query_bundle.records[q_i].bbox
-        results.append(
-            {
-                "rank": rank,
-                "row_index": int(idx),
-                "score": float(best_scores[int(idx)]),
-                "matched_query_face_index": q_i,
-                "matched_query_bbox": {"x": int(q_box.x), "y": int(q_box.y), "w": int(q_box.w), "h": int(q_box.h)},
-                "source_type": source_type,
-                "source_name": source_name,
-                "frame_index": frame_index,
-                "face_index": face_index,
-                "bbox": {"x": x, "y": y, "w": w, "h": h},
-                "crop_path": str(crop_path),
-                "annotated_path": str(annotated_path),
-            }
-        )
+        if resolved_mode == FeatureMode.FACE:
+            q_box = query_records[q_i].bbox
+            item["matched_query_face_index"] = q_i
+            item["matched_query_bbox"] = {"x": int(q_box.x), "y": int(q_box.y), "w": int(q_box.w), "h": int(q_box.h)}
+        else:
+            item["matched_query_person_index"] = 0
+            item["matched_query_source"] = "whole_image"
+
+        results.append(item)
 
     result_json = output_dir / "results.json"
     payload = {
         "query_path": str(query_file),
         "index_name": library_name,
+        "feature_mode": resolved_mode.value,
         "features_path": str(features_path),
         "meta_path": str(meta_path),
         "topk": k,
-        "query_face_count": len(query_bundle.records),
+        "query_item_count": int(query_features.shape[0]),
         "results": results,
     }
+    if resolved_mode == FeatureMode.FACE:
+        payload["query_face_count"] = int(query_features.shape[0])
+    else:
+        payload["query_person_count"] = int(query_features.shape[0])
+
     with result_json.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    return {
+    out = {
         "output_dir": str(output_dir),
         "result_json": str(result_json),
+        "feature_mode": resolved_mode.value,
         "topk": k,
-        "query_face_count": len(query_bundle.records),
+        "query_item_count": int(query_features.shape[0]),
     }
+    if resolved_mode == FeatureMode.FACE:
+        out["query_face_count"] = int(query_features.shape[0])
+    else:
+        out["query_person_count"] = int(query_features.shape[0])
+    return out
 
 
 __all__ = ["search_query_in_index"]
