@@ -84,6 +84,17 @@ class RebuildIndexOptions:
     person_input_size: int = 224
 
 
+@dataclass(slots=True)
+class IndexStatusOptions:
+    feature_mode: str = "face"
+    index_name: str | None = None
+    gallery_path: str | None = None
+    library_type: str | None = None
+    source_name: str | None = None
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
+
+
 def _default_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -165,6 +176,15 @@ def _index_dir_for_library(library_type: str) -> Path:
     raise ValueError(f"Unsupported library_type: {library_type}")
 
 
+def _index_paths(index_dir: Path, index_name: str, feature_mode: str) -> dict[str, str]:
+    suffix = f"{index_name}_{feature_mode}"
+    return {
+        "features_path": str(index_dir / f"{suffix}_features.npy"),
+        "meta_path": str(index_dir / f"{suffix}_meta.csv"),
+        "info_path": str(index_dir / f"{suffix}_info.json"),
+    }
+
+
 def validate_extension(filename: str, allowed_extensions: set[str], kind: str) -> str:
     suffix = Path(filename or "").suffix.lower()
     if suffix not in allowed_extensions:
@@ -239,6 +259,50 @@ def _to_search_options(options: SearchOptions | RebuildIndexOptions) -> dict[str
 def _count_indexes(index_dir: Path, mode: str) -> int:
     pattern = f"*_{mode}_features.npy"
     return len(list(index_dir.glob(pattern))) if index_dir.exists() else 0
+
+
+def _resolve_status_target(options: IndexStatusOptions) -> tuple[str, str]:
+    if options.gallery_path:
+        gallery_path = resolve_gallery_path(options.gallery_path)
+        library_type = _guess_library_type(gallery_path)
+        fallback = gallery_path.name if gallery_path.is_dir() else gallery_path.stem
+        return library_type, fallback
+
+    library_type = str(options.library_type or "").strip().lower()
+    if library_type not in {"image", "video"}:
+        raise ValueError("library_type must be image or video when gallery_path is not provided")
+
+    fallback = Path(options.source_name or "").stem
+    if not fallback and not options.index_name:
+        raise ValueError("source_name or index_name is required when gallery_path is not provided")
+    return library_type, fallback
+
+
+def get_index_status(options: IndexStatusOptions) -> dict[str, Any]:
+    mode = _resolve_feature_mode(options.feature_mode)
+    person_model = resolve_person_model(options.person_model) if mode == "person" else "resnet"
+    library_type, fallback = _resolve_status_target(options)
+    base_index_name = _normalize_index_name(options.index_name, fallback)
+    resolved_index_name = resolve_effective_index_name(
+        index_name=base_index_name,
+        feature_mode=mode,
+        person_model=person_model,
+        resnet_backbone=options.resnet_backbone,
+    )
+    index_dir = _index_dir_for_library(library_type)
+    index_paths = _index_paths(index_dir=index_dir, index_name=resolved_index_name, feature_mode=mode)
+    missing_paths = [path for path in index_paths.values() if not Path(path).exists()]
+
+    return {
+        "exists": not missing_paths,
+        "library_type": library_type,
+        "feature_mode": mode,
+        "person_model": person_model,
+        "index_name": resolved_index_name,
+        "index_dir": str(index_dir),
+        "index_paths": index_paths,
+        "missing_paths": missing_paths,
+    }
 
 
 def _is_module_importable(name: str) -> bool:
@@ -447,6 +511,36 @@ def search_uploaded_video(
     )
 
     out = search_gallery(query_path=query_path, gallery_path=str(video_path), options=updated)
+    out["video_name"] = video_name
+    out["uploaded_video_path"] = str(video_path)
+    return out
+
+
+def rebuild_uploaded_video_index(
+    *,
+    video_path: Path,
+    video_name: str,
+    options: RebuildIndexOptions,
+) -> dict[str, Any]:
+    fallback_index_name = _normalize_index_name(options.index_name, Path(video_name).stem or video_path.stem)
+    updated = RebuildIndexOptions(
+        gallery_path=str(video_path),
+        feature_mode=options.feature_mode,
+        index_name=fallback_index_name,
+        device=options.device,
+        sample_fps=options.sample_fps,
+        arcface_weight_path=options.arcface_weight_path,
+        yolo_weights=options.yolo_weights,
+        yolo_conf=options.yolo_conf,
+        yolo_iou=options.yolo_iou,
+        yolo_max_det=options.yolo_max_det,
+        person_model=options.person_model,
+        resnet_backbone=options.resnet_backbone,
+        resnet_pretrained=options.resnet_pretrained,
+        resnet_weight_path=options.resnet_weight_path,
+        person_input_size=options.person_input_size,
+    )
+    out = rebuild_gallery_index(updated)
     out["video_name"] = video_name
     out["uploaded_video_path"] = str(video_path)
     return out

@@ -36,41 +36,7 @@
     </header>
 
     <main class="container page-grid">
-      <section class="panel">
-        <h2>手动构建索引</h2>
-        <form id="rebuildForm" class="form-grid">
-          <label>
-            <span>库路径 📖</span>
-            <input name="gallery_path" type="text" value="data_runtime/gallery/images/yoasobi_TFT" required />
-          </label>
-          <label>
-            <span>特征模式</span>
-            <select name="feature_mode">
-              <option value="face">face</option>
-              <option value="person">person</option>
-            </select>
-          </label>
-          <label>
-            <span>人体特征模型</span>
-            <select name="person_model">
-              <option value="resnet">ResNet-18</option>
-              <option value="osnet">OSNet x1.0</option>
-            </select>
-          </label>
-          <label>
-            <span>索引名（可选）</span>
-            <input name="index_name" type="text" placeholder="默认按图库名" />
-          </label>
-          <label>
-            <span>采样 FPS（视频库）</span>
-            <input name="sample_fps" type="number" min="0.1" step="0.1" value="1.0" />
-          </label>
-          <button class="primary" type="submit">构建索引</button>
-          <p class="message" id="rebuildMessage"></p>
-        </form>
-      </section>
-
-      <section class="panel">
+      <section class="panel panel-wide">
         <div class="tab-header">
           <h2>检索任务</h2>
           <div class="tab-switch" role="tablist" aria-label="检索方式切换">
@@ -135,7 +101,12 @@
               <span>采样 FPS（视频库）</span>
               <input name="sample_fps" type="number" min="0.1" step="0.1" value="1.0" />
             </label>
-            <button class="primary" type="submit">开始检索</button>
+            <div class="index-action-row">
+              <div class="index-status is-unknown" id="galleryIndexStatus">索引状态: 未检查</div>
+              <button class="secondary" id="galleryRefreshIndexBtn" type="button">刷新状态</button>
+              <button class="secondary" id="galleryBuildIndexBtn" type="button">构建索引</button>
+              <button class="primary" type="submit">开始检索</button>
+            </div>
             <p class="message" id="galleryMessage"></p>
           </form>
         </div>
@@ -176,7 +147,12 @@
               <span>采样 FPS</span>
               <input name="sample_fps" type="number" min="0.1" step="0.1" value="1.0" />
             </label>
-            <button class="primary" type="submit">开始视频检索</button>
+            <div class="index-action-row">
+              <div class="index-status is-unknown" id="videoIndexStatus">索引状态: 未检查</div>
+              <button class="secondary" id="videoRefreshIndexBtn" type="button">刷新状态</button>
+              <button class="secondary" id="videoBuildIndexBtn" type="button">构建索引</button>
+              <button class="primary" type="submit">开始视频检索</button>
+            </div>
             <p class="message" id="videoMessage"></p>
           </form>
         </div>

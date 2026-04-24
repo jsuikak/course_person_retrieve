@@ -221,6 +221,43 @@ button.secondary {
   color: var(--err);
 }
 
+.index-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.index-status {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7f9ff;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.index-status.is-ready {
+  border-color: #b9e4cd;
+  background: #f2fbf6;
+  color: var(--ok);
+}
+
+.index-status.is-missing {
+  border-color: #f0d1a6;
+  background: #fff8eb;
+  color: #925c12;
+}
+
+.index-status.is-error {
+  border-color: #f0b8b8;
+  background: #fff5f5;
+  color: var(--err);
+}
+
 .status-grid {
   display: grid;
   gap: 6px;
@@ -307,6 +344,10 @@ button.secondary {
   }
 
   .page-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .index-action-row {
     grid-template-columns: 1fr;
   }
 }

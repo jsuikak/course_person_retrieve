@@ -142,6 +142,89 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(kwargs["prefix"], "demo_idx_osnet_x1_0")
             self.assertEqual(kwargs["person_model"], "osnet")
 
+    def test_index_status_uses_effective_index_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            gallery_dir = tmp_dir / "gallery"
+            gallery_dir.mkdir(parents=True, exist_ok=True)
+            (gallery_dir / "a.jpg").write_bytes(b"a")
+
+            index_dir = tmp_dir / "image_index"
+            index_dir.mkdir(parents=True, exist_ok=True)
+            for suffix in ("features.npy", "meta.csv", "info.json"):
+                (index_dir / f"demo_resnet18_person_{suffix}").write_bytes(b"x")
+
+            with mock.patch("src.app.backend.services.IMAGE_INDEX_DIR", index_dir):
+                resp = self.client.post(
+                    "/api/index/status",
+                    json={
+                        "gallery_path": str(gallery_dir),
+                        "feature_mode": "person",
+                        "person_model": "resnet",
+                        "index_name": "demo",
+                    },
+                )
+
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertTrue(data["exists"])
+            self.assertEqual(data["index_name"], "demo_resnet18")
+            self.assertEqual(data["library_type"], "image")
+
+    def test_index_status_for_uploaded_video_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            index_dir = tmp_dir / "video_index"
+            index_dir.mkdir(parents=True, exist_ok=True)
+
+            with mock.patch("src.app.backend.services.VIDEO_INDEX_DIR", index_dir):
+                resp = self.client.post(
+                    "/api/index/status",
+                    json={
+                        "library_type": "video",
+                        "source_name": "clip.mp4",
+                        "feature_mode": "person",
+                        "person_model": "osnet",
+                    },
+                )
+
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertFalse(data["exists"])
+            self.assertEqual(data["index_name"], "clip_osnet_x1_0")
+            self.assertEqual(data["library_type"], "video")
+
+    def test_rebuild_uploaded_video_index_mapping(self) -> None:
+        fake_summary = {
+            "library_type": "video",
+            "feature_mode": "person",
+            "person_model": "osnet",
+            "index_name": "clip_osnet_x1_0",
+            "total_items": 2,
+            "feature_dim": 512,
+            "index_paths": {},
+        }
+
+        with mock.patch("src.app.backend.app.rebuild_uploaded_video_index", return_value=fake_summary) as m_rebuild:
+            files = {"video": ("clip.mp4", b"video-data", "video/mp4")}
+            data = {
+                "feature_mode": "person",
+                "person_model": "osnet",
+                "sample_fps": "1.5",
+            }
+            resp = self.client.post("/api/admin/rebuild-uploaded-video-index", files=files, data=data)
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["index_name"], "clip_osnet_x1_0")
+        self.assertIn("status", payload)
+
+        kwargs = m_rebuild.call_args.kwargs
+        self.assertEqual(kwargs["video_name"], "clip.mp4")
+        self.assertEqual(kwargs["options"].feature_mode, "person")
+        self.assertEqual(kwargs["options"].person_model, "osnet")
+        self.assertEqual(kwargs["options"].sample_fps, 1.5)
+
     def test_rebuild_gallery_index_missing_dependency_returns_400(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)

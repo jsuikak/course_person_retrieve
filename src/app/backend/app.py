@@ -11,11 +11,14 @@ from .services import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     WEB_OUTPUT_DIR,
+    IndexStatusOptions,
     RebuildIndexOptions,
     SearchOptions,
     clear_web_outputs,
+    get_index_status,
     get_status,
     rebuild_gallery_index,
+    rebuild_uploaded_video_index,
     save_upload,
     search_gallery,
     search_uploaded_video,
@@ -43,6 +46,16 @@ class RebuildIndexPayload(BaseModel):
     resnet_pretrained: bool = False
     resnet_weight_path: str | None = None
     person_input_size: int = 224
+
+
+class IndexStatusPayload(BaseModel):
+    feature_mode: str = "face"
+    index_name: str | None = None
+    gallery_path: str | None = None
+    library_type: str | None = None
+    source_name: str | None = None
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
 
 
 @app.exception_handler(ValueError)
@@ -85,6 +98,57 @@ async def api_rebuild_gallery_index(payload: RebuildIndexPayload) -> dict[str, o
     if options.feature_mode not in FEATURE_MODES:
         raise ValueError(f"Unsupported feature_mode: {options.feature_mode}")
     summary = rebuild_gallery_index(options)
+    summary["status"] = get_status()
+    return summary
+
+
+@app.post("/api/index/status")
+async def api_index_status(payload: IndexStatusPayload) -> dict[str, object]:
+    options = IndexStatusOptions(**payload.model_dump())
+    return get_index_status(options)
+
+
+@app.post("/api/admin/rebuild-uploaded-video-index")
+async def api_rebuild_uploaded_video_index(
+    video: UploadFile = File(...),
+    feature_mode: str = Form("face"),
+    index_name: str | None = Form(None),
+    device: str | None = Form(None),
+    sample_fps: float = Form(1.0),
+    arcface_weight_path: str | None = Form(None),
+    yolo_weights: str | None = Form(None),
+    yolo_conf: float = Form(0.25),
+    yolo_iou: float = Form(0.7),
+    yolo_max_det: int = Form(100),
+    person_model: str = Form("resnet"),
+    resnet_backbone: str = Form("resnet18"),
+    resnet_pretrained: bool = Form(False),
+    resnet_weight_path: str | None = Form(None),
+    person_input_size: int = Form(224),
+) -> dict[str, object]:
+    video_path = await save_upload(video, kind="video", allowed_extensions=VIDEO_EXTENSIONS)
+    options = RebuildIndexOptions(
+        gallery_path=str(video_path),
+        feature_mode=feature_mode,
+        index_name=index_name,
+        device=device,
+        sample_fps=sample_fps,
+        arcface_weight_path=arcface_weight_path,
+        yolo_weights=yolo_weights,
+        yolo_conf=yolo_conf,
+        yolo_iou=yolo_iou,
+        yolo_max_det=yolo_max_det,
+        person_model=person_model,
+        resnet_backbone=resnet_backbone,
+        resnet_pretrained=resnet_pretrained,
+        resnet_weight_path=resnet_weight_path,
+        person_input_size=person_input_size,
+    )
+    summary = rebuild_uploaded_video_index(
+        video_path=video_path,
+        video_name=video.filename or video_path.name,
+        options=options,
+    )
     summary["status"] = get_status()
     return summary
 
