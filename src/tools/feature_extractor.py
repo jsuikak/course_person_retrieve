@@ -1,4 +1,4 @@
-"""统一特征提取接口（ArcFace + ResNet，内存输入版）。"""
+"""统一特征提取接口（ArcFace + person backbone，内存输入版）。"""
 
 from __future__ import annotations
 
@@ -33,7 +33,8 @@ class FeatureExtractorConfig:
     face_blur_threshold: float = 0.0
     face_min_size: int = 0
 
-    resnet_backbone: str = "resnet50"
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
     resnet_pretrained: bool = False
     resnet_weight_path: Optional[str] = None
     person_input_size: int = 224
@@ -149,7 +150,23 @@ class FeatureExtractor:
             return
         self.person_model, self.person_dim = self._build_person_model()
 
+    def _resolve_person_model(self) -> str:
+        model_name = str(self.config.person_model or "resnet").lower().strip()
+        if model_name == "resnet":
+            return "resnet"
+        if model_name in {"osnet", "osnet_x1_0"}:
+            return "osnet"
+        raise ValueError(f"Unsupported person_model: {self.config.person_model}")
+
     def _build_person_model(self) -> Tuple[torch.nn.Module, int]:
+        model_name = self._resolve_person_model()
+        if model_name == "resnet":
+            return self._build_resnet_person_model()
+        if model_name == "osnet":
+            return self._build_osnet_person_model()
+        raise ValueError(f"Unsupported person_model: {self.config.person_model}")
+
+    def _build_resnet_person_model(self) -> Tuple[torch.nn.Module, int]:
         backbone = self.config.resnet_backbone.lower().strip()
         if backbone == "resnet18":
             try:
@@ -193,12 +210,32 @@ class FeatureExtractor:
         model.to(self.device)
         return model, feature_dim
 
+    def _build_osnet_person_model(self) -> Tuple[torch.nn.Module, int]:
+        try:
+            import torchreid
+        except ImportError as exc:
+            raise ImportError("torchreid is required when person_model=osnet. Install project dependencies first.") from exc
+
+        model = torchreid.models.build_model(
+            name="osnet_x1_0",
+            num_classes=1000,
+            loss="softmax",
+            pretrained=True,
+            use_gpu=self.device.type == "cuda",
+        )
+        model.eval()
+        model.to(self.device)
+        return model, int(getattr(model, "feature_dim", 512) or 512)
+
     def _preprocess_person(self, image_bgr: np.ndarray) -> torch.Tensor:
         if image_bgr is None or image_bgr.size == 0:
             raise ValueError("empty person image")
 
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        image_rgb = cv2.resize(image_rgb, (self.config.person_input_size, self.config.person_input_size))
+        if self._resolve_person_model() == "osnet":
+            image_rgb = cv2.resize(image_rgb, (128, 256))
+        else:
+            image_rgb = cv2.resize(image_rgb, (self.config.person_input_size, self.config.person_input_size))
         image_rgb = image_rgb.astype(np.float32) / 255.0
 
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)

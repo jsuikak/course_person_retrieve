@@ -59,6 +59,8 @@ class AppBackendApiTest(unittest.TestCase):
         self.assertIn("defaults", data)
         self.assertIn("indexes", data)
         self.assertIn("feature_modes", data)
+        self.assertIn("person_models", data)
+        self.assertIn("torchreid_importable", data["runtime"])
 
     def test_rebuild_gallery_index_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,6 +101,46 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(Path(kwargs["library_path"]).resolve(), gallery_dir.resolve())
             self.assertEqual(kwargs["prefix"], "demo_idx")
             self.assertEqual(kwargs["sample_fps"], 2.0)
+            self.assertEqual(kwargs["person_model"], "resnet")
+            self.assertEqual(kwargs["resnet_backbone"], "resnet18")
+
+    def test_rebuild_gallery_index_person_model_suffix_and_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            gallery_dir = tmp_dir / "gallery"
+            gallery_dir.mkdir(parents=True, exist_ok=True)
+            (gallery_dir / "a.jpg").write_bytes(b"a")
+
+            fake_result = mock.Mock()
+            fake_result.library_type = "image"
+            fake_result.feature_mode = "person"
+            fake_result.output_paths = {
+                "features_path": str(tmp_dir / "person_features.npy"),
+                "meta_path": str(tmp_dir / "person_meta.csv"),
+                "info_path": str(tmp_dir / "person_info.json"),
+            }
+            fake_result.total_items = 1
+            fake_result.feature_dim = 512
+
+            with mock.patch("src.app.backend.services.build_feature_index", return_value=fake_result) as m_build:
+                resp = self.client.post(
+                    "/api/admin/rebuild-gallery-index",
+                    json={
+                        "gallery_path": str(gallery_dir),
+                        "feature_mode": "person",
+                        "person_model": "osnet",
+                        "index_name": "demo_idx",
+                    },
+                )
+
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["index_name"], "demo_idx_osnet_x1_0")
+            self.assertEqual(data["person_model"], "osnet")
+
+            kwargs = m_build.call_args.kwargs
+            self.assertEqual(kwargs["prefix"], "demo_idx_osnet_x1_0")
+            self.assertEqual(kwargs["person_model"], "osnet")
 
     def test_rebuild_gallery_index_missing_dependency_returns_400(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -134,6 +176,7 @@ class AppBackendApiTest(unittest.TestCase):
             fake_summary = {
                 "library_type": "image",
                 "feature_mode": "face",
+                "person_model": "resnet",
                 "index_name": "demo",
                 "build": {"status": "built"},
                 "retrieval": {"result_json": str(result_json_path), "output_dir": "x"},
@@ -158,6 +201,8 @@ class AppBackendApiTest(unittest.TestCase):
             kwargs = m_flow.call_args.kwargs
             self.assertEqual(kwargs["feature_mode"], "face")
             self.assertEqual(kwargs["index_name"], "demo")
+            self.assertEqual(kwargs["person_model"], "resnet")
+            self.assertEqual(kwargs["resnet_backbone"], "resnet18")
 
     def test_search_uploaded_video_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,7 +211,8 @@ class AppBackendApiTest(unittest.TestCase):
             fake_summary = {
                 "library_type": "video",
                 "feature_mode": "person",
-                "index_name": "v_idx",
+                "person_model": "osnet",
+                "index_name": "v_idx_osnet_x1_0",
                 "build": {"status": "skipped"},
                 "retrieval": {"result_json": str(result_json_path), "output_dir": "x"},
             }
@@ -178,6 +224,7 @@ class AppBackendApiTest(unittest.TestCase):
                 }
                 data = {
                     "feature_mode": "person",
+                    "person_model": "osnet",
                     "index_name": "v_idx",
                     "topk": "3",
                     "sample_fps": "1.5",
@@ -187,12 +234,15 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
             self.assertEqual(payload["feature_mode"], "person")
+            self.assertEqual(payload["person_model"], "osnet")
+            self.assertEqual(payload["index_name"], "v_idx_osnet_x1_0")
             self.assertEqual(payload["video_name"], "clip.mp4")
             self.assertEqual(payload["result_count"], 1)
 
             kwargs = m_flow.call_args.kwargs
             self.assertEqual(kwargs["feature_mode"], "person")
-            self.assertEqual(kwargs["index_name"], "v_idx")
+            self.assertEqual(kwargs["person_model"], "osnet")
+            self.assertEqual(kwargs["index_name"], "v_idx_osnet_x1_0")
             self.assertEqual(kwargs["sample_fps"], 1.5)
 
     def test_clear_web_outputs_only_clears_temp(self) -> None:

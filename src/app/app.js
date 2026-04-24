@@ -118,8 +118,8 @@ function renderStatus(data) {
   const items = [
     ["运行解释器", data?.runtime?.python_executable ?? "unknown"],
     [
-      "运行依赖(ultralytics/uvicorn)",
-      `${data?.runtime?.ultralytics_importable ? "ok" : "missing"}/${data?.runtime?.uvicorn_importable ? "ok" : "missing"}`,
+      "运行依赖(ultralytics/uvicorn/torchreid)",
+      `${data?.runtime?.ultralytics_importable ? "ok" : "missing"}/${data?.runtime?.uvicorn_importable ? "ok" : "missing"}/${data?.runtime?.torchreid_importable ? "ok" : "missing"}`,
     ],
     ["ArcFace 权重", data?.weights?.arcface?.exists ? "存在" : "缺失"],
     ["YOLO 默认权重", data?.weights?.yolo_default?.exists ? "存在" : "缺失"],
@@ -146,10 +146,11 @@ function renderResults(data) {
   resultGrid.innerHTML = "";
 
   const mode = data?.feature_mode || "-";
+  const personModel = data?.person_model || "-";
   const libraryType = data?.library_type || "-";
   const indexName = data?.index_name || "-";
   const count = data?.result_count || 0;
-  resultSummary.textContent = `mode=${mode} | library=${libraryType} | index=${indexName} | results=${count}`;
+  resultSummary.textContent = `mode=${mode} | person_model=${personModel} | library=${libraryType} | index=${indexName} | results=${count}`;
 
   if (data?.query_url) {
     queryPreview.innerHTML = `

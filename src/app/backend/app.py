@@ -38,7 +38,8 @@ class RebuildIndexPayload(BaseModel):
     yolo_conf: float = 0.25
     yolo_iou: float = 0.7
     yolo_max_det: int = 100
-    resnet_backbone: str = "resnet50"
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
     resnet_pretrained: bool = False
     resnet_weight_path: str | None = None
     person_input_size: int = 224
@@ -102,7 +103,8 @@ async def api_search_gallery(
     yolo_conf: float = Form(0.25),
     yolo_iou: float = Form(0.7),
     yolo_max_det: int = Form(100),
-    resnet_backbone: str = Form("resnet50"),
+    person_model: str = Form("resnet"),
+    resnet_backbone: str = Form("resnet18"),
     resnet_pretrained: bool = Form(False),
     resnet_weight_path: str | None = Form(None),
     person_input_size: int = Form(224),
@@ -119,6 +121,7 @@ async def api_search_gallery(
         yolo_conf=yolo_conf,
         yolo_iou=yolo_iou,
         yolo_max_det=yolo_max_det,
+        person_model=person_model,
         resnet_backbone=resnet_backbone,
         resnet_pretrained=resnet_pretrained,
         resnet_weight_path=resnet_weight_path,
@@ -141,7 +144,8 @@ async def api_search_uploaded_video(
     yolo_conf: float = Form(0.25),
     yolo_iou: float = Form(0.7),
     yolo_max_det: int = Form(100),
-    resnet_backbone: str = Form("resnet50"),
+    person_model: str = Form("resnet"),
+    resnet_backbone: str = Form("resnet18"),
     resnet_pretrained: bool = Form(False),
     resnet_weight_path: str | None = Form(None),
     person_input_size: int = Form(224),
@@ -159,6 +163,7 @@ async def api_search_uploaded_video(
         yolo_conf=yolo_conf,
         yolo_iou=yolo_iou,
         yolo_max_det=yolo_max_det,
+        person_model=person_model,
         resnet_backbone=resnet_backbone,
         resnet_pretrained=resnet_pretrained,
         resnet_weight_path=resnet_weight_path,

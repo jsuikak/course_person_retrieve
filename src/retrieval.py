@@ -163,6 +163,7 @@ def _extract_person_query_feature(
     query_file: Path,
     arcface_weight_path: str,
     device: str,
+    person_model: str,
     resnet_backbone: str,
     resnet_pretrained: bool,
     resnet_weight_path: str | None,
@@ -176,6 +177,7 @@ def _extract_person_query_feature(
             device=device,
             detect_face=False,
             face_flip_test=False,
+            person_model=person_model,
             resnet_backbone=resnet_backbone,
             resnet_pretrained=resnet_pretrained,
             resnet_weight_path=resnet_weight_path,
@@ -201,7 +203,8 @@ def search_query_in_index(
     yolo_conf: float = 0.25,
     yolo_iou: float = 0.7,
     yolo_max_det: int = 100,
-    resnet_backbone: str = "resnet50",
+    person_model: str = "resnet",
+    resnet_backbone: str = "resnet18",
     resnet_pretrained: bool = False,
     resnet_weight_path: str | None = None,
     person_input_size: int = 224,
@@ -250,11 +253,24 @@ def search_query_in_index(
             query_file=query_file,
             arcface_weight_path=arcface_weight_path,
             device=device,
+            person_model=person_model,
             resnet_backbone=resnet_backbone,
             resnet_pretrained=resnet_pretrained,
             resnet_weight_path=resnet_weight_path,
             person_input_size=person_input_size,
         )
+
+    if query_features.ndim != 2 or query_features.shape[1] != gallery_features.shape[1]:
+        detail = (
+            f"feature dimension mismatch for mode={resolved_mode.value}: "
+            f"index dim={gallery_features.shape[1]}, query dim={query_features.shape[1]}"
+        )
+        if resolved_mode == FeatureMode.PERSON:
+            detail += (
+                f". Rebuild/select an index for person_model={person_model}, "
+                f"resnet_backbone={resnet_backbone}."
+            )
+        raise ValueError(detail)
 
     gallery_norm = _l2_normalize_rows(gallery_features)
     query_norm = _l2_normalize_rows(query_features)
@@ -354,6 +370,7 @@ def search_query_in_index(
         payload["query_face_count"] = int(query_features.shape[0])
     else:
         payload["query_person_count"] = int(query_features.shape[0])
+        payload["person_model"] = str(person_model or "resnet").strip().lower()
 
     with result_json.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -369,6 +386,7 @@ def search_query_in_index(
         out["query_face_count"] = int(query_features.shape[0])
     else:
         out["query_person_count"] = int(query_features.shape[0])
+        out["person_model"] = str(person_model or "resnet").strip().lower()
     return out
 
 

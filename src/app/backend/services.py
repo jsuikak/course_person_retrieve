@@ -13,7 +13,7 @@ from typing import Any
 import torch
 from fastapi import UploadFile
 
-from src.app_retrieval import run_app_retrieval_flow
+from src.app_retrieval import resolve_effective_index_name, resolve_person_model, run_app_retrieval_flow
 from src.face_index_builder import build_feature_index
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -58,7 +58,8 @@ class SearchOptions:
     yolo_conf: float = 0.25
     yolo_iou: float = 0.7
     yolo_max_det: int = 100
-    resnet_backbone: str = "resnet50"
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
     resnet_pretrained: bool = False
     resnet_weight_path: str | None = None
     person_input_size: int = 224
@@ -76,7 +77,8 @@ class RebuildIndexOptions:
     yolo_conf: float = 0.25
     yolo_iou: float = 0.7
     yolo_max_det: int = 100
-    resnet_backbone: str = "resnet50"
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
     resnet_pretrained: bool = False
     resnet_weight_path: str | None = None
     person_input_size: int = 224
@@ -224,6 +226,7 @@ def _to_search_options(options: SearchOptions | RebuildIndexOptions) -> dict[str
         "yolo_conf": float(options.yolo_conf),
         "yolo_iou": float(options.yolo_iou),
         "yolo_max_det": int(options.yolo_max_det),
+        "person_model": resolve_person_model(options.person_model) if mode == "person" else "resnet",
         "resnet_backbone": str(options.resnet_backbone),
         "resnet_pretrained": bool(options.resnet_pretrained),
         "resnet_weight_path": (
@@ -252,6 +255,7 @@ def get_status() -> dict[str, Any]:
             "python_version": sys.version.split()[0],
             "ultralytics_importable": _is_module_importable("ultralytics"),
             "uvicorn_importable": _is_module_importable("uvicorn"),
+            "torchreid_importable": _is_module_importable("torchreid"),
         },
         "weights": {
             "arcface": {
@@ -292,6 +296,7 @@ def get_status() -> dict[str, Any]:
             },
         },
         "feature_modes": sorted(FEATURE_MODES),
+        "person_models": ["resnet", "osnet"],
         "default_device": _default_device(),
     }
 
@@ -302,7 +307,13 @@ def rebuild_gallery_index(options: RebuildIndexOptions) -> dict[str, Any]:
     gallery_path = resolve_gallery_path(options.gallery_path)
     library_type = _guess_library_type(gallery_path)
 
-    resolved_index_name = _normalize_index_name(options.index_name, gallery_path.name if gallery_path.is_dir() else gallery_path.stem)
+    base_index_name = _normalize_index_name(options.index_name, gallery_path.name if gallery_path.is_dir() else gallery_path.stem)
+    resolved_index_name = resolve_effective_index_name(
+        index_name=base_index_name,
+        feature_mode=search_options["feature_mode"],
+        person_model=search_options["person_model"],
+        resnet_backbone=search_options["resnet_backbone"],
+    )
     index_dir = _index_dir_for_library(library_type)
 
     result = build_feature_index(
@@ -318,6 +329,7 @@ def rebuild_gallery_index(options: RebuildIndexOptions) -> dict[str, Any]:
         yolo_conf=search_options["yolo_conf"],
         yolo_iou=search_options["yolo_iou"],
         yolo_max_det=search_options["yolo_max_det"],
+        person_model=search_options["person_model"],
         resnet_backbone=search_options["resnet_backbone"],
         resnet_pretrained=search_options["resnet_pretrained"],
         resnet_weight_path=search_options["resnet_weight_path"],
@@ -328,6 +340,7 @@ def rebuild_gallery_index(options: RebuildIndexOptions) -> dict[str, Any]:
         "gallery_path": str(gallery_path),
         "library_type": result.library_type,
         "feature_mode": result.feature_mode,
+        "person_model": search_options["person_model"],
         "index_name": resolved_index_name,
         "index_paths": result.output_paths,
         "index_dir": str(index_dir),
@@ -359,7 +372,13 @@ def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) 
     search_options = _to_search_options(options)
     resolved_gallery = resolve_gallery_path(gallery_path)
     fallback_name = resolved_gallery.name if resolved_gallery.is_dir() else resolved_gallery.stem
-    resolved_index_name = _normalize_index_name(options.index_name, fallback_name)
+    base_index_name = _normalize_index_name(options.index_name, fallback_name)
+    resolved_index_name = resolve_effective_index_name(
+        index_name=base_index_name,
+        feature_mode=search_options["feature_mode"],
+        person_model=search_options["person_model"],
+        resnet_backbone=search_options["resnet_backbone"],
+    )
 
     summary = run_app_retrieval_flow(
         query_path=str(query_path),
@@ -376,6 +395,7 @@ def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) 
         yolo_conf=search_options["yolo_conf"],
         yolo_iou=search_options["yolo_iou"],
         yolo_max_det=search_options["yolo_max_det"],
+        person_model=search_options["person_model"],
         resnet_backbone=search_options["resnet_backbone"],
         resnet_pretrained=search_options["resnet_pretrained"],
         resnet_weight_path=search_options["resnet_weight_path"],
@@ -391,6 +411,7 @@ def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) 
         "gallery_path": str(resolved_gallery),
         "library_type": summary["library_type"],
         "feature_mode": summary["feature_mode"],
+        "person_model": summary["person_model"],
         "index_name": summary["index_name"],
         "build": summary["build"],
         "retrieval": summary["retrieval"],
@@ -418,6 +439,7 @@ def search_uploaded_video(
         yolo_conf=options.yolo_conf,
         yolo_iou=options.yolo_iou,
         yolo_max_det=options.yolo_max_det,
+        person_model=options.person_model,
         resnet_backbone=options.resnet_backbone,
         resnet_pretrained=options.resnet_pretrained,
         resnet_weight_path=options.resnet_weight_path,

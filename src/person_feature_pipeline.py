@@ -1,4 +1,4 @@
-"""人体特征提取封装接口（YOLO Person + ResNet 特征）。"""
+"""人体特征提取封装接口（YOLO Person + person backbone 特征）。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ class PersonFeaturePipelineConfig:
 
     arcface_weight_path: str
     device: str = "cpu"
-    resnet_backbone: str = "resnet50"
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
     resnet_pretrained: bool = False
     resnet_weight_path: Optional[str] = None
     person_input_size: int = 224
@@ -123,7 +124,7 @@ class PersonFeatureBundle:
 class PersonFeaturePipeline:
     """人体特征提取流程。
 
-    流程：读图 -> YOLO 人体检测 -> 人体裁剪 -> ResNet 特征提取。
+    流程：读图 -> YOLO 人体检测 -> 人体裁剪 -> person backbone 特征提取。
     """
 
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -146,6 +147,7 @@ class PersonFeaturePipeline:
                 device=config.device,
                 detect_face=False,
                 face_flip_test=False,
+                person_model=config.person_model,
                 resnet_backbone=config.resnet_backbone,
                 resnet_pretrained=config.resnet_pretrained,
                 resnet_weight_path=config.resnet_weight_path,

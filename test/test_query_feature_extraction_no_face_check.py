@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import cv2
+import csv
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +74,8 @@ class QueryFeatureExtractionNoFaceCheckTest(unittest.TestCase):
                     query_file=query_file,
                     arcface_weight_path="./models/weights/arcface.pt",
                     device="cpu",
-                    resnet_backbone="resnet50",
+                    person_model="resnet",
+                    resnet_backbone="resnet18",
                     resnet_pretrained=False,
                     resnet_weight_path=None,
                     person_input_size=224,
@@ -82,6 +84,30 @@ class QueryFeatureExtractionNoFaceCheckTest(unittest.TestCase):
             self.assertEqual(feat.shape, (1, 4))
             self.assertGreaterEqual(len(_FakeExtractor.configs), 1)
             self.assertFalse(bool(_FakeExtractor.configs[-1].detect_face))
+
+    def test_search_rejects_mismatched_person_feature_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            query_file = self._write_query_image(tmp_dir, "person_query.jpg")
+            features_path = tmp_dir / "demo_person_features.npy"
+            meta_path = tmp_dir / "demo_person_meta.csv"
+            np.save(features_path, np.zeros((1, 8), dtype=np.float32))
+            with meta_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["row_id", "source_type", "source_name", "frame_index", "person_index", "x", "y", "w", "h"])
+                writer.writerow([0, "image", "dummy.jpg", -1, 0, 0, 0, 10, 10])
+
+            with mock.patch("src.retrieval.FeatureExtractor", _FakeExtractor):
+                with self.assertRaisesRegex(ValueError, "feature dimension mismatch"):
+                    retrieval.search_query_in_index(
+                        query_path=str(query_file),
+                        index_name="demo",
+                        indexes_root=str(tmp_dir),
+                        retrieval_output_root=str(tmp_dir / "out"),
+                        feature_mode="person",
+                        person_model="resnet",
+                        resnet_backbone="resnet18",
+                    )
 
 
 if __name__ == "__main__":

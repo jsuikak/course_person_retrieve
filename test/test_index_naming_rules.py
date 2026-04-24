@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.retrieval import _find_index_files
+from src.app_retrieval import resolve_effective_index_name
 from src.tools.feature_extractor import FeatureMode
 
 
@@ -58,7 +59,26 @@ class IndexNamingRulesTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 _find_index_files("demo", str(root), FeatureMode.FACE)
 
+    def test_person_index_names_include_model_key(self) -> None:
+        self.assertEqual(
+            resolve_effective_index_name("demo", "person", "resnet", "resnet18"),
+            "demo_resnet18",
+        )
+        self.assertEqual(
+            resolve_effective_index_name("demo", "person", "osnet", "resnet18"),
+            "demo_osnet_x1_0",
+        )
+        self.assertEqual(
+            resolve_effective_index_name("demo_osnet_x1_0", "person", "osnet", "resnet18"),
+            "demo_osnet_x1_0",
+        )
+
+    def test_face_index_name_does_not_include_person_model_key(self) -> None:
+        self.assertEqual(
+            resolve_effective_index_name("demo", "face", "osnet", "resnet18"),
+            "demo",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-
