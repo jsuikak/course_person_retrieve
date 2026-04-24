@@ -5,24 +5,22 @@ import importlib.util
 import re
 import shutil
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
-from fastapi import UploadFile
 
 from src.app_retrieval import resolve_effective_index_name, resolve_person_model, run_app_retrieval_flow
 from src.face_index_builder import build_feature_index
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIR = PROJECT_ROOT / "src" / "app"
+DATA_RUNTIME_DIR = PROJECT_ROOT / "data_runtime"
 INDEXES_ROOT = PROJECT_ROOT / "indexes"
 IMAGE_INDEX_DIR = INDEXES_ROOT / "image_index"
 VIDEO_INDEX_DIR = INDEXES_ROOT / "video_index"
 WEB_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "web"
-UPLOAD_DIR = WEB_OUTPUT_DIR / "uploads"
 RETRIEVAL_OUTPUT_DIR = WEB_OUTPUT_DIR / "retrieval"
 ARCFACE_WEIGHTS = PROJECT_ROOT / "models" / "weights" / "arcface.pt"
 YOLO_WEIGHT_CANDIDATES = [
@@ -30,6 +28,7 @@ YOLO_WEIGHT_CANDIDATES = [
     PROJECT_ROOT / "yolo11n.pt",
 ]
 
+DEFAULT_QUERY_DIR = DATA_RUNTIME_DIR / "query"
 DEFAULT_GALLERY_IMAGES = PROJECT_ROOT / "data_runtime" / "gallery" / "images"
 DEFAULT_GALLERY_VIDEOS = PROJECT_ROOT / "data_runtime" / "gallery" / "videos"
 
@@ -39,7 +38,16 @@ FEATURE_MODES = {"face", "person"}
 
 
 def ensure_runtime_dirs() -> None:
-    for directory in (INDEXES_ROOT, IMAGE_INDEX_DIR, VIDEO_INDEX_DIR, WEB_OUTPUT_DIR, UPLOAD_DIR, RETRIEVAL_OUTPUT_DIR):
+    for directory in (
+        DEFAULT_QUERY_DIR,
+        DEFAULT_GALLERY_IMAGES,
+        DEFAULT_GALLERY_VIDEOS,
+        INDEXES_ROOT,
+        IMAGE_INDEX_DIR,
+        VIDEO_INDEX_DIR,
+        WEB_OUTPUT_DIR,
+        RETRIEVAL_OUTPUT_DIR,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -88,9 +96,7 @@ class RebuildIndexOptions:
 class IndexStatusOptions:
     feature_mode: str = "face"
     index_name: str | None = None
-    gallery_path: str | None = None
-    library_type: str | None = None
-    source_name: str | None = None
+    gallery_path: str = ""
     person_model: str = "resnet"
     resnet_backbone: str = "resnet18"
 
@@ -138,6 +144,67 @@ def _resolve_input_path(path_value: str, *, must_exist: bool = True) -> Path:
     return path
 
 
+def _relative_to_project(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _has_supported_file(root: Path, extensions: set[str]) -> bool:
+    return root.exists() and any(p.is_file() and p.suffix.lower() in extensions for p in root.rglob("*"))
+
+
+def _runtime_option(path: Path) -> dict[str, str]:
+    value = _relative_to_project(path)
+    return {
+        "label": value,
+        "name": path.name,
+        "value": value,
+    }
+
+
+def _list_query_images(root: Path = DEFAULT_QUERY_DIR) -> list[dict[str, str]]:
+    if not root.exists():
+        return []
+    files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+    files.sort(key=lambda p: _relative_to_project(p).lower())
+    return [_runtime_option(p) for p in files]
+
+
+def _list_gallery_dirs(root: Path, extensions: set[str]) -> list[dict[str, str]]:
+    if not root.exists():
+        return []
+    dirs = [p for p in root.iterdir() if p.is_dir() and _has_supported_file(p, extensions)]
+    dirs.sort(key=lambda p: _relative_to_project(p).lower())
+    return [_runtime_option(p) for p in dirs]
+
+
+def get_runtime_options() -> dict[str, Any]:
+    ensure_runtime_dirs()
+    return {
+        "roots": {
+            "query_images": _relative_to_project(DEFAULT_QUERY_DIR),
+            "image_galleries": _relative_to_project(DEFAULT_GALLERY_IMAGES),
+            "video_galleries": _relative_to_project(DEFAULT_GALLERY_VIDEOS),
+        },
+        "query_images": _list_query_images(DEFAULT_QUERY_DIR),
+        "image_galleries": _list_gallery_dirs(DEFAULT_GALLERY_IMAGES, IMAGE_EXTENSIONS),
+        "video_galleries": _list_gallery_dirs(DEFAULT_GALLERY_VIDEOS, VIDEO_EXTENSIONS),
+    }
+
+
+def resolve_query_path(path_value: str) -> Path:
+    path = _resolve_input_path(path_value, must_exist=True)
+    if not path.is_file():
+        raise ValueError(f"query_path must be a file: {path}")
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        allowed = ", ".join(sorted(IMAGE_EXTENSIONS))
+        raise ValueError(f"Unsupported query image type. Allowed extensions: {allowed}")
+    return path
+
+
 def resolve_gallery_path(path_value: str) -> Path:
     path = _resolve_input_path(path_value, must_exist=True)
     if not path.is_file() and not path.is_dir():
@@ -146,19 +213,16 @@ def resolve_gallery_path(path_value: str) -> Path:
 
 
 def _guess_library_type(gallery_path: Path) -> str:
-    image_exts = {".jpg", ".jpeg", ".png", ".bmp"}
-    video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-
     if gallery_path.is_file():
         ext = gallery_path.suffix.lower()
-        if ext in image_exts:
+        if ext in IMAGE_EXTENSIONS:
             return "image"
-        if ext in video_exts:
+        if ext in VIDEO_EXTENSIONS:
             return "video"
         raise ValueError(f"unsupported gallery file type: {gallery_path}")
 
-    has_image = any(p.suffix.lower() in image_exts for p in gallery_path.rglob("*") if p.is_file())
-    has_video = any(p.suffix.lower() in video_exts for p in gallery_path.rglob("*") if p.is_file())
+    has_image = any(p.suffix.lower() in IMAGE_EXTENSIONS for p in gallery_path.rglob("*") if p.is_file())
+    has_video = any(p.suffix.lower() in VIDEO_EXTENSIONS for p in gallery_path.rglob("*") if p.is_file())
     if has_image and not has_video:
         return "image"
     if has_video and not has_image:
@@ -185,46 +249,16 @@ def _index_paths(index_dir: Path, index_name: str, feature_mode: str) -> dict[st
     }
 
 
-def validate_extension(filename: str, allowed_extensions: set[str], kind: str) -> str:
-    suffix = Path(filename or "").suffix.lower()
-    if suffix not in allowed_extensions:
-        allowed = ", ".join(sorted(allowed_extensions))
-        raise ValueError(f"Unsupported {kind} file type. Allowed extensions: {allowed}")
-    return suffix
-
-
-async def save_upload(
-    upload: UploadFile,
-    *,
-    kind: str,
-    allowed_extensions: set[str],
-    output_dir: Path = UPLOAD_DIR,
-) -> Path:
-    suffix = validate_extension(upload.filename or "", allowed_extensions, kind)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{kind}_{uuid.uuid4().hex}{suffix}"
-
-    size = 0
-    with output_path.open("wb") as f:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            f.write(chunk)
-
-    await upload.close()
-    if size == 0:
-        output_path.unlink(missing_ok=True)
-        raise ValueError(f"Uploaded {kind} file is empty.")
-    return output_path
-
-
 def path_to_url(path: str | Path) -> str:
     resolved = Path(path).resolve()
     try:
         rel = resolved.relative_to(WEB_OUTPUT_DIR.resolve())
         return f"/outputs-static/{rel.as_posix()}"
+    except ValueError:
+        pass
+    try:
+        rel = resolved.relative_to(DATA_RUNTIME_DIR.resolve())
+        return f"/data-runtime-static/{rel.as_posix()}"
     except ValueError:
         return ""
 
@@ -261,27 +295,12 @@ def _count_indexes(index_dir: Path, mode: str) -> int:
     return len(list(index_dir.glob(pattern))) if index_dir.exists() else 0
 
 
-def _resolve_status_target(options: IndexStatusOptions) -> tuple[str, str]:
-    if options.gallery_path:
-        gallery_path = resolve_gallery_path(options.gallery_path)
-        library_type = _guess_library_type(gallery_path)
-        fallback = gallery_path.name if gallery_path.is_dir() else gallery_path.stem
-        return library_type, fallback
-
-    library_type = str(options.library_type or "").strip().lower()
-    if library_type not in {"image", "video"}:
-        raise ValueError("library_type must be image or video when gallery_path is not provided")
-
-    fallback = Path(options.source_name or "").stem
-    if not fallback and not options.index_name:
-        raise ValueError("source_name or index_name is required when gallery_path is not provided")
-    return library_type, fallback
-
-
 def get_index_status(options: IndexStatusOptions) -> dict[str, Any]:
     mode = _resolve_feature_mode(options.feature_mode)
     person_model = resolve_person_model(options.person_model) if mode == "person" else "resnet"
-    library_type, fallback = _resolve_status_target(options)
+    gallery_path = resolve_gallery_path(options.gallery_path)
+    library_type = _guess_library_type(gallery_path)
+    fallback = gallery_path.name if gallery_path.is_dir() else gallery_path.stem
     base_index_name = _normalize_index_name(options.index_name, fallback)
     resolved_index_name = resolve_effective_index_name(
         index_name=base_index_name,
@@ -335,6 +354,7 @@ def get_status() -> dict[str, Any]:
         "defaults": {
             "gallery_images": str(DEFAULT_GALLERY_IMAGES),
             "gallery_videos": str(DEFAULT_GALLERY_VIDEOS),
+            "query_images": str(DEFAULT_QUERY_DIR),
             "indexes_root": str(INDEXES_ROOT),
             "web_output_root": str(WEB_OUTPUT_DIR),
             "retrieval_output_root": str(RETRIEVAL_OUTPUT_DIR),
@@ -431,9 +451,10 @@ def _flatten_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return flattened
 
 
-def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) -> dict[str, Any]:
+def search_gallery(query_path: Path | str, gallery_path: str, options: SearchOptions) -> dict[str, Any]:
     ensure_runtime_dirs()
     search_options = _to_search_options(options)
+    resolved_query = resolve_query_path(str(query_path))
     resolved_gallery = resolve_gallery_path(gallery_path)
     fallback_name = resolved_gallery.name if resolved_gallery.is_dir() else resolved_gallery.stem
     base_index_name = _normalize_index_name(options.index_name, fallback_name)
@@ -445,7 +466,7 @@ def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) 
     )
 
     summary = run_app_retrieval_flow(
-        query_path=str(query_path),
+        query_path=str(resolved_query),
         gallery_path=str(resolved_gallery),
         index_name=resolved_index_name,
         topk=search_options["topk"],
@@ -470,8 +491,8 @@ def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) 
     results = _flatten_results(payload)
 
     return {
-        "query_url": path_to_url(query_path),
-        "query_path": str(query_path),
+        "query_url": path_to_url(resolved_query),
+        "query_path": str(resolved_query),
         "gallery_path": str(resolved_gallery),
         "library_type": summary["library_type"],
         "feature_mode": summary["feature_mode"],
@@ -484,75 +505,11 @@ def search_gallery(query_path: Path, gallery_path: str, options: SearchOptions) 
     }
 
 
-def search_uploaded_video(
-    *,
-    query_path: Path,
-    video_path: Path,
-    video_name: str,
-    options: SearchOptions,
-) -> dict[str, Any]:
-    fallback_index_name = _normalize_index_name(options.index_name, Path(video_name).stem or video_path.stem)
-    updated = SearchOptions(
-        feature_mode=options.feature_mode,
-        index_name=fallback_index_name,
-        topk=options.topk,
-        device=options.device,
-        sample_fps=options.sample_fps,
-        arcface_weight_path=options.arcface_weight_path,
-        yolo_weights=options.yolo_weights,
-        yolo_conf=options.yolo_conf,
-        yolo_iou=options.yolo_iou,
-        yolo_max_det=options.yolo_max_det,
-        person_model=options.person_model,
-        resnet_backbone=options.resnet_backbone,
-        resnet_pretrained=options.resnet_pretrained,
-        resnet_weight_path=options.resnet_weight_path,
-        person_input_size=options.person_input_size,
-    )
-
-    out = search_gallery(query_path=query_path, gallery_path=str(video_path), options=updated)
-    out["video_name"] = video_name
-    out["uploaded_video_path"] = str(video_path)
-    return out
-
-
-def rebuild_uploaded_video_index(
-    *,
-    video_path: Path,
-    video_name: str,
-    options: RebuildIndexOptions,
-) -> dict[str, Any]:
-    fallback_index_name = _normalize_index_name(options.index_name, Path(video_name).stem or video_path.stem)
-    updated = RebuildIndexOptions(
-        gallery_path=str(video_path),
-        feature_mode=options.feature_mode,
-        index_name=fallback_index_name,
-        device=options.device,
-        sample_fps=options.sample_fps,
-        arcface_weight_path=options.arcface_weight_path,
-        yolo_weights=options.yolo_weights,
-        yolo_conf=options.yolo_conf,
-        yolo_iou=options.yolo_iou,
-        yolo_max_det=options.yolo_max_det,
-        person_model=options.person_model,
-        resnet_backbone=options.resnet_backbone,
-        resnet_pretrained=options.resnet_pretrained,
-        resnet_weight_path=options.resnet_weight_path,
-        person_input_size=options.person_input_size,
-    )
-    out = rebuild_gallery_index(updated)
-    out["video_name"] = video_name
-    out["uploaded_video_path"] = str(video_path)
-    return out
-
-
 def clear_web_outputs() -> dict[str, Any]:
-    for path in (UPLOAD_DIR, RETRIEVAL_OUTPUT_DIR):
-        if path.exists():
-            shutil.rmtree(path)
-        path.mkdir(parents=True, exist_ok=True)
+    if RETRIEVAL_OUTPUT_DIR.exists():
+        shutil.rmtree(RETRIEVAL_OUTPUT_DIR)
+    RETRIEVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "cleared": True,
-        "upload_dir": str(UPLOAD_DIR),
         "retrieval_output_dir": str(RETRIEVAL_OUTPUT_DIR),
     }

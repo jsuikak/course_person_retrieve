@@ -62,6 +62,56 @@ class AppBackendApiTest(unittest.TestCase):
         self.assertIn("person_models", data)
         self.assertIn("torchreid_importable", data["runtime"])
 
+    def test_runtime_options_lists_supported_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+            tmp_dir = Path(tmp)
+            query_dir = tmp_dir / "data_runtime" / "query"
+            image_root = tmp_dir / "data_runtime" / "gallery" / "images"
+            video_root = tmp_dir / "data_runtime" / "gallery" / "videos"
+            query_dir.mkdir(parents=True, exist_ok=True)
+            image_root.mkdir(parents=True, exist_ok=True)
+            video_root.mkdir(parents=True, exist_ok=True)
+
+            (query_dir / "a.jpg").write_bytes(b"a")
+            nested_query = query_dir / "nested"
+            nested_query.mkdir()
+            (nested_query / "b.png").write_bytes(b"b")
+            (query_dir / "ignore.txt").write_text("x", encoding="utf-8")
+
+            image_gallery = image_root / "faces"
+            image_gallery.mkdir()
+            (image_gallery / "one.webp").write_bytes(b"x")
+            empty_image_gallery = image_root / "empty"
+            empty_image_gallery.mkdir()
+            (empty_image_gallery / "ignore.txt").write_text("x", encoding="utf-8")
+
+            video_gallery = video_root / "clips"
+            video_gallery.mkdir()
+            (video_gallery / "clip.mp4").write_bytes(b"x")
+            unsupported_video_gallery = video_root / "unsupported"
+            unsupported_video_gallery.mkdir()
+            (unsupported_video_gallery / "clip.txt").write_text("x", encoding="utf-8")
+
+            with (
+                mock.patch("src.app.backend.services.DEFAULT_QUERY_DIR", query_dir),
+                mock.patch("src.app.backend.services.DEFAULT_GALLERY_IMAGES", image_root),
+                mock.patch("src.app.backend.services.DEFAULT_GALLERY_VIDEOS", video_root),
+            ):
+                resp = self.client.get("/api/runtime/options")
+
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            query_values = [item["value"] for item in data["query_images"]]
+            image_values = [item["value"] for item in data["image_galleries"]]
+            video_values = [item["value"] for item in data["video_galleries"]]
+
+            self.assertEqual(query_values, sorted(query_values))
+            self.assertIn(f"{tmp_dir.name}/data_runtime/query/a.jpg", query_values)
+            self.assertIn(f"{tmp_dir.name}/data_runtime/query/nested/b.png", query_values)
+            self.assertNotIn(f"{tmp_dir.name}/data_runtime/query/ignore.txt", query_values)
+            self.assertEqual(image_values, [f"{tmp_dir.name}/data_runtime/gallery/images/faces"])
+            self.assertEqual(video_values, [f"{tmp_dir.name}/data_runtime/gallery/videos/clips"])
+
     def test_rebuild_gallery_index_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
@@ -171,9 +221,13 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(data["index_name"], "demo_resnet18")
             self.assertEqual(data["library_type"], "image")
 
-    def test_index_status_for_uploaded_video_name(self) -> None:
+    def test_index_status_for_video_gallery_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
+            video_gallery = tmp_dir / "clips"
+            video_gallery.mkdir(parents=True, exist_ok=True)
+            (video_gallery / "clip.mp4").write_bytes(b"x")
+
             index_dir = tmp_dir / "video_index"
             index_dir.mkdir(parents=True, exist_ok=True)
 
@@ -181,8 +235,7 @@ class AppBackendApiTest(unittest.TestCase):
                 resp = self.client.post(
                     "/api/index/status",
                     json={
-                        "library_type": "video",
-                        "source_name": "clip.mp4",
+                        "gallery_path": str(video_gallery),
                         "feature_mode": "person",
                         "person_model": "osnet",
                     },
@@ -191,39 +244,50 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             data = resp.json()
             self.assertFalse(data["exists"])
-            self.assertEqual(data["index_name"], "clip_osnet_x1_0")
+            self.assertEqual(data["index_name"], "clips_osnet_x1_0")
             self.assertEqual(data["library_type"], "video")
 
-    def test_rebuild_uploaded_video_index_mapping(self) -> None:
-        fake_summary = {
-            "library_type": "video",
-            "feature_mode": "person",
-            "person_model": "osnet",
-            "index_name": "clip_osnet_x1_0",
-            "total_items": 2,
-            "feature_dim": 512,
-            "index_paths": {},
-        }
+    def test_rebuild_video_gallery_index_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            video_gallery = tmp_dir / "clips"
+            video_gallery.mkdir(parents=True, exist_ok=True)
+            (video_gallery / "clip.mp4").write_bytes(b"x")
 
-        with mock.patch("src.app.backend.app.rebuild_uploaded_video_index", return_value=fake_summary) as m_rebuild:
-            files = {"video": ("clip.mp4", b"video-data", "video/mp4")}
-            data = {
-                "feature_mode": "person",
-                "person_model": "osnet",
-                "sample_fps": "1.5",
+            fake_result = mock.Mock()
+            fake_result.library_type = "video"
+            fake_result.feature_mode = "person"
+            fake_result.output_paths = {
+                "features_path": str(tmp_dir / "video_features.npy"),
+                "meta_path": str(tmp_dir / "video_meta.csv"),
+                "info_path": str(tmp_dir / "video_info.json"),
             }
-            resp = self.client.post("/api/admin/rebuild-uploaded-video-index", files=files, data=data)
+            fake_result.total_items = 2
+            fake_result.feature_dim = 512
 
-        self.assertEqual(resp.status_code, 200)
-        payload = resp.json()
-        self.assertEqual(payload["index_name"], "clip_osnet_x1_0")
-        self.assertIn("status", payload)
+            with mock.patch("src.app.backend.services.build_feature_index", return_value=fake_result) as m_build:
+                resp = self.client.post(
+                    "/api/admin/rebuild-gallery-index",
+                    json={
+                        "gallery_path": str(video_gallery),
+                        "feature_mode": "person",
+                        "person_model": "osnet",
+                        "sample_fps": 1.5,
+                    },
+                )
 
-        kwargs = m_rebuild.call_args.kwargs
-        self.assertEqual(kwargs["video_name"], "clip.mp4")
-        self.assertEqual(kwargs["options"].feature_mode, "person")
-        self.assertEqual(kwargs["options"].person_model, "osnet")
-        self.assertEqual(kwargs["options"].sample_fps, 1.5)
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual(payload["library_type"], "video")
+            self.assertEqual(payload["index_name"], "clips_osnet_x1_0")
+            self.assertIn("status", payload)
+
+            kwargs = m_build.call_args.kwargs
+            self.assertEqual(Path(kwargs["library_path"]).resolve(), video_gallery.resolve())
+            self.assertEqual(kwargs["library_type"], "video")
+            self.assertEqual(kwargs["prefix"], "clips_osnet_x1_0")
+            self.assertEqual(kwargs["person_model"], "osnet")
+            self.assertEqual(kwargs["sample_fps"], 1.5)
 
     def test_rebuild_gallery_index_missing_dependency_returns_400(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,6 +315,8 @@ class AppBackendApiTest(unittest.TestCase):
     def test_search_gallery_auto_build_branch_and_url_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
+            query_file = tmp_dir / "query.jpg"
+            query_file.write_bytes(b"abc")
             gallery_dir = tmp_dir / "gallery"
             gallery_dir.mkdir(parents=True, exist_ok=True)
             (gallery_dir / "a.jpg").write_bytes(b"a")
@@ -266,14 +332,14 @@ class AppBackendApiTest(unittest.TestCase):
             }
 
             with mock.patch("src.app.backend.services.run_app_retrieval_flow", return_value=fake_summary) as m_flow:
-                files = {"query": ("query.jpg", b"abc", "image/jpeg")}
                 data = {
+                    "query_path": str(query_file),
                     "gallery_path": str(gallery_dir),
                     "feature_mode": "face",
                     "index_name": "demo",
-                    "topk": "5",
+                    "topk": 5,
                 }
-                resp = self.client.post("/api/search/gallery", files=files, data=data)
+                resp = self.client.post("/api/search/gallery", json=data)
 
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
@@ -287,9 +353,15 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(kwargs["person_model"], "resnet")
             self.assertEqual(kwargs["resnet_backbone"], "resnet18")
 
-    def test_search_uploaded_video_mapping(self) -> None:
+    def test_search_video_gallery_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
+            query_file = tmp_dir / "query.jpg"
+            query_file.write_bytes(b"abc")
+            video_gallery = tmp_dir / "clips"
+            video_gallery.mkdir(parents=True, exist_ok=True)
+            (video_gallery / "clip.mp4").write_bytes(b"video-data")
+
             result_json_path = self._write_result_json(tmp_dir)
             fake_summary = {
                 "library_type": "video",
@@ -301,25 +373,23 @@ class AppBackendApiTest(unittest.TestCase):
             }
 
             with mock.patch("src.app.backend.services.run_app_retrieval_flow", return_value=fake_summary) as m_flow:
-                files = {
-                    "query": ("query.jpg", b"abc", "image/jpeg"),
-                    "video": ("clip.mp4", b"video-data", "video/mp4"),
-                }
                 data = {
+                    "query_path": str(query_file),
+                    "gallery_path": str(video_gallery),
                     "feature_mode": "person",
                     "person_model": "osnet",
                     "index_name": "v_idx",
-                    "topk": "3",
-                    "sample_fps": "1.5",
+                    "topk": 3,
+                    "sample_fps": 1.5,
                 }
-                resp = self.client.post("/api/search/uploaded-video", files=files, data=data)
+                resp = self.client.post("/api/search/gallery", json=data)
 
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
             self.assertEqual(payload["feature_mode"], "person")
             self.assertEqual(payload["person_model"], "osnet")
             self.assertEqual(payload["index_name"], "v_idx_osnet_x1_0")
-            self.assertEqual(payload["video_name"], "clip.mp4")
+            self.assertNotIn("video_name", payload)
             self.assertEqual(payload["result_count"], 1)
 
             kwargs = m_flow.call_args.kwargs
@@ -329,11 +399,12 @@ class AppBackendApiTest(unittest.TestCase):
             self.assertEqual(kwargs["sample_fps"], 1.5)
 
     def test_clear_web_outputs_only_clears_temp(self) -> None:
-        services.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        legacy_upload_dir = services.WEB_OUTPUT_DIR / "uploads"
+        legacy_upload_dir.mkdir(parents=True, exist_ok=True)
         services.RETRIEVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         services.IMAGE_INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
-        upload_file = services.UPLOAD_DIR / "tmp.bin"
+        upload_file = legacy_upload_dir / "tmp.bin"
         retrieval_file = services.RETRIEVAL_OUTPUT_DIR / "tmp.json"
         index_file = services.IMAGE_INDEX_DIR / "keep.txt"
 
@@ -346,7 +417,8 @@ class AppBackendApiTest(unittest.TestCase):
         data = resp.json()
         self.assertTrue(data["cleared"])
 
-        self.assertFalse(upload_file.exists())
+        self.assertNotIn("upload_dir", data)
+        self.assertTrue(upload_file.exists())
         self.assertFalse(retrieval_file.exists())
         self.assertTrue(index_file.exists())
 

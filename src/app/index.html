@@ -39,41 +39,47 @@
       <section class="panel panel-wide">
         <div class="tab-header">
           <h2>检索任务</h2>
-          <div class="tab-switch" role="tablist" aria-label="检索方式切换">
-            <button
-              id="tabBtnGallery"
-              class="tab-btn is-active"
-              type="button"
-              role="tab"
-              aria-controls="tabPaneGallery"
-              aria-selected="true"
-              data-tab="gallery"
-            >
-              图片检索图库
-            </button>
-            <button
-              id="tabBtnVideo"
-              class="tab-btn"
-              type="button"
-              role="tab"
-              aria-controls="tabPaneVideo"
-              aria-selected="false"
-              data-tab="video"
-            >
-              图片检索上传视频
-            </button>
+          <div class="tab-controls">
+            <button class="secondary" id="refreshOptionsBtn" type="button">刷新文件列表</button>
+            <div class="tab-switch" role="tablist" aria-label="检索方式切换">
+              <button
+                id="tabBtnGallery"
+                class="tab-btn is-active"
+                type="button"
+                role="tab"
+                aria-controls="tabPaneGallery"
+                aria-selected="true"
+                data-tab="gallery"
+              >
+                图片检索图库
+              </button>
+              <button
+                id="tabBtnVideo"
+                class="tab-btn"
+                type="button"
+                role="tab"
+                aria-controls="tabPaneVideo"
+                aria-selected="false"
+                data-tab="video"
+              >
+                图片检索视频库
+              </button>
+            </div>
           </div>
         </div>
 
         <div id="tabPaneGallery" class="tab-pane is-active" role="tabpanel" aria-labelledby="tabBtnGallery">
           <form id="gallerySearchForm" class="form-grid">
+            <div class="query-image-row">
+              <label>
+                <span>查询图片</span>
+                <select id="galleryQuerySelect" name="query_path" required></select>
+              </label>
+              <figure class="query-image-preview-box" id="galleryQueryImagePreview" aria-live="polite"></figure>
+            </div>
             <label>
-              <span>查询图片 🔍</span>
-              <input name="query" type="file" accept="image/*" required />
-            </label>
-            <label>
-              <span>库路径 📖</span>
-              <input name="gallery_path" type="text" value="data_runtime/gallery/images/yoasobi_TFT" required />
+              <span>图库路径</span>
+              <select id="galleryPathSelect" name="gallery_path" required></select>
             </label>
             <label>
               <span>特征模式</span>
@@ -83,7 +89,7 @@
               </select>
             </label>
             <label>
-              <span>人体特征模型</span>
+              <span>人体特征模型(仅用于person模式)</span>
               <select name="person_model">
                 <option value="resnet">ResNet-18</option>
                 <option value="osnet">OSNet x1.0</option>
@@ -113,13 +119,16 @@
 
         <div id="tabPaneVideo" class="tab-pane" role="tabpanel" aria-labelledby="tabBtnVideo" hidden>
           <form id="videoSearchForm" class="form-grid">
+            <div class="query-image-row">
+              <label>
+                <span>查询图片</span>
+                <select id="videoQuerySelect" name="query_path" required></select>
+              </label>
+              <figure class="query-image-preview-box" id="videoQueryImagePreview" aria-live="polite"></figure>
+            </div>
             <label>
-              <span>查询图片 🔍</span>
-              <input name="query" type="file" accept="image/*" required />
-            </label>
-            <label>
-              <span>视频文件</span>
-              <input name="video" type="file" accept="video/*" required />
+              <span>视频库路径</span>
+              <select id="videoPathSelect" name="gallery_path" required></select>
             </label>
             <label>
               <span>特征模式</span>
@@ -161,7 +170,7 @@
       <section class="panel panel-wide">
         <div class="result-header">
           <h2>检索结果</h2>
-          <button class="secondary" id="clearOutputsBtn" type="button">清理 Web 临时输出</button>
+          <button class="secondary" id="clearOutputsBtn" type="button">清理检索输出</button>
         </div>
         <div id="resultSummary" class="result-summary">等待操作</div>
         <div id="queryPreview" class="query-preview"></div>

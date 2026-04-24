@@ -5,7 +5,12 @@ const resultGrid = document.getElementById("resultGrid");
 const statusDock = document.getElementById("statusDock");
 const statusTrigger = document.getElementById("statusTrigger");
 let activeSearchTab = "gallery";
+let runtimeOptions = null;
 const indexStatusTimers = {};
+const queryPreviewBindings = [
+  ["galleryQuerySelect", "galleryQueryImagePreview"],
+  ["videoQuerySelect", "videoQueryImagePreview"],
+];
 
 function setActiveSearchTab(tabName) {
   activeSearchTab = tabName;
@@ -118,6 +123,174 @@ function readFormAsObject(form) {
   return out;
 }
 
+function normalizeSearchBody(form) {
+  const body = readFormAsObject(form);
+  if (body.topk) {
+    body.topk = Number(body.topk);
+  }
+  if (body.sample_fps) {
+    body.sample_fps = Number(body.sample_fps);
+  }
+  return body;
+}
+
+function normalizeRebuildBody(form) {
+  const body = normalizeSearchBody(form);
+  delete body.query_path;
+  delete body.topk;
+  return body;
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.detail || "请求失败");
+  }
+  return data;
+}
+
+function optionValue(item) {
+  return typeof item === "string" ? item : item?.value || "";
+}
+
+function optionLabel(item) {
+  if (typeof item === "string") return item;
+  return item?.label || item?.value || "";
+}
+
+function encodePathForUrl(pathValue) {
+  return pathValue
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
+
+function queryPathToPreviewUrl(pathValue) {
+  const value = String(pathValue || "").trim().replaceAll("\\", "/");
+  if (!value) return "";
+  if (value.startsWith("/data-runtime-static/")) return value;
+
+  const runtimePrefix = "data_runtime/";
+  if (!value.startsWith(runtimePrefix)) return "";
+
+  const runtimeRelativePath = value.slice(runtimePrefix.length);
+  if (!runtimeRelativePath) return "";
+  return `/data-runtime-static/${encodePathForUrl(runtimeRelativePath)}`;
+}
+
+function fileNameFromPath(pathValue) {
+  const value = String(pathValue || "").trim().replaceAll("\\", "/");
+  const parts = value.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+
+function renderQueryPreviewPlaceholder(preview, text, isError = false) {
+  preview.innerHTML = "";
+  const placeholder = document.createElement("div");
+  placeholder.className = "query-image-placeholder";
+  placeholder.textContent = text;
+  placeholder.classList.toggle("is-error", isError);
+  preview.appendChild(placeholder);
+}
+
+function updateQueryImagePreview(selectId, previewId) {
+  const select = document.getElementById(selectId);
+  const preview = document.getElementById(previewId);
+  if (!select || !preview) return;
+
+  const selectedPath = select.value;
+  const previewUrl = queryPathToPreviewUrl(selectedPath);
+  if (!previewUrl) {
+    renderQueryPreviewPlaceholder(preview, select.disabled ? "暂无查询图片" : "未选择查询图片");
+    return;
+  }
+
+  preview.innerHTML = "";
+  const img = document.createElement("img");
+  const fileName = fileNameFromPath(selectedPath);
+  img.src = previewUrl;
+  img.alt = fileName ? `查询图片预览: ${fileName}` : "查询图片预览";
+  img.addEventListener("error", () => {
+    renderQueryPreviewPlaceholder(preview, "预览加载失败", true);
+  });
+
+  const caption = document.createElement("figcaption");
+  caption.textContent = fileName || selectedPath;
+
+  preview.append(img, caption);
+}
+
+function updateAllQueryImagePreviews() {
+  for (const [selectId, previewId] of queryPreviewBindings) {
+    updateQueryImagePreview(selectId, previewId);
+  }
+}
+
+function initQueryImagePreviews() {
+  for (const [selectId, previewId] of queryPreviewBindings) {
+    const select = document.getElementById(selectId);
+    if (!select) continue;
+    select.addEventListener("change", () => updateQueryImagePreview(selectId, previewId));
+    select.addEventListener("input", () => updateQueryImagePreview(selectId, previewId));
+  }
+  updateAllQueryImagePreviews();
+}
+
+function fillSelect(selectId, items, emptyText) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+
+  const previousValue = select.value;
+  select.innerHTML = "";
+
+  if (!items?.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = emptyText;
+    select.appendChild(option);
+    select.disabled = true;
+    return;
+  }
+
+  select.disabled = false;
+  for (const item of items) {
+    const value = optionValue(item);
+    if (!value) continue;
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = optionLabel(item);
+    select.appendChild(option);
+  }
+
+  if ([...select.options].some((option) => option.value === previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+async function loadRuntimeOptions() {
+  const res = await fetch("/api/runtime/options");
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.detail || "文件列表加载失败");
+  }
+
+  runtimeOptions = data;
+  fillSelect("galleryQuerySelect", data.query_images, "data_runtime/query 下没有查询图片");
+  fillSelect("videoQuerySelect", data.query_images, "data_runtime/query 下没有查询图片");
+  fillSelect("galleryPathSelect", data.image_galleries, "data_runtime/gallery/images 下没有图库目录");
+  fillSelect("videoPathSelect", data.video_galleries, "data_runtime/gallery/videos 下没有视频库目录");
+  updateAllQueryImagePreviews();
+  scheduleIndexStatusRefresh("gallery");
+  scheduleIndexStatusRefresh("video");
+  return data;
+}
+
 function getSearchForm(tabName) {
   if (tabName === "gallery") {
     return document.getElementById("gallerySearchForm");
@@ -160,23 +333,13 @@ function buildIndexStatusBody(tabName) {
     body.index_name = indexName;
   }
 
-  if (tabName === "gallery") {
-    const galleryPath = form.elements.gallery_path?.value?.trim();
-    if (!galleryPath) {
-      setIndexStatus(tabName, "索引状态: 请填写库路径", "unknown");
-      return null;
-    }
-    body.gallery_path = galleryPath;
-    return body;
-  }
-
-  const videoFile = form.elements.video?.files?.[0];
-  if (!videoFile) {
-    setIndexStatus(tabName, "索引状态: 请选择视频文件", "unknown");
+  const galleryPath = form.elements.gallery_path?.value?.trim();
+  if (!galleryPath) {
+    const label = tabName === "gallery" ? "请选择图库路径" : "请选择视频库路径";
+    setIndexStatus(tabName, `索引状态: ${label}`, "unknown");
     return null;
   }
-  body.library_type = "video";
-  body.source_name = videoFile.name;
+  body.gallery_path = galleryPath;
   return body;
 }
 
@@ -220,7 +383,7 @@ function initIndexStatusWatchers() {
   for (const tabName of ["gallery", "video"]) {
     const form = getSearchForm(tabName);
     if (!form) continue;
-    const watchedNames = ["gallery_path", "video", "feature_mode", "person_model", "index_name"];
+    const watchedNames = ["query_path", "gallery_path", "feature_mode", "person_model", "index_name"];
     for (const name of watchedNames) {
       const field = form.elements[name];
       if (!field) continue;
@@ -293,88 +456,41 @@ function renderResults(data) {
   resultGrid.innerHTML = cards.join("");
 }
 
-async function buildGalleryIndex() {
-  const form = getSearchForm("gallery");
+async function buildIndex(tabName) {
+  const form = getSearchForm(tabName);
   if (!form) return;
-  setMessage("galleryMessage", "正在构建索引...");
+  const messageId = tabName === "gallery" ? "galleryMessage" : "videoMessage";
+  const label = tabName === "gallery" ? "图库" : "视频库";
+  setMessage(messageId, `正在构建${label}索引...`);
   try {
-    const body = readFormAsObject(form);
-    delete body.topk;
-    if (body.sample_fps) {
-      body.sample_fps = Number(body.sample_fps);
-    }
-    const res = await fetch("/api/admin/rebuild-gallery-index", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data?.detail || "构建失败");
-    }
+    const body = normalizeRebuildBody(form);
+    const data = await postJson("/api/admin/rebuild-gallery-index", body);
     setMessage(
-      "galleryMessage",
+      messageId,
       `构建完成: ${data.feature_mode} / ${data.index_name} / total_items=${data.total_items}`,
     );
-    renderIndexStatus("gallery", { ...data, exists: true });
+    renderIndexStatus(tabName, { ...data, exists: true });
     await refreshStatus();
   } catch (error) {
-    setMessage("galleryMessage", error.message || "构建失败", true);
-    await refreshIndexStatus("gallery");
+    setMessage(messageId, error.message || "构建失败", true);
+    await refreshIndexStatus(tabName);
   }
 }
 
+async function buildGalleryIndex() {
+  return buildIndex("gallery");
+}
+
 async function buildVideoIndex() {
-  const form = getSearchForm("video");
-  if (!form) return;
-  const videoFile = form.elements.video?.files?.[0];
-  if (!videoFile) {
-    setMessage("videoMessage", "请先选择视频文件", true);
-    setIndexStatus("video", "索引状态: 请选择视频文件", "unknown");
-    return;
-  }
-
-  setMessage("videoMessage", "正在构建视频索引...");
-  try {
-    const formData = new FormData();
-    formData.append("video", videoFile);
-    for (const name of ["feature_mode", "person_model", "index_name", "sample_fps"]) {
-      const value = form.elements[name]?.value?.trim();
-      if (value) {
-        formData.append(name, value);
-      }
-    }
-
-    const res = await fetch("/api/admin/rebuild-uploaded-video-index", {
-      method: "POST",
-      body: formData,
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data?.detail || "视频索引构建失败");
-    }
-    setMessage(
-      "videoMessage",
-      `构建完成: ${data.feature_mode} / ${data.index_name} / total_items=${data.total_items}`,
-    );
-    renderIndexStatus("video", { ...data, exists: true });
-    await refreshStatus();
-  } catch (error) {
-    setMessage("videoMessage", error.message || "视频索引构建失败", true);
-    await refreshIndexStatus("video");
-  }
+  return buildIndex("video");
 }
 
 async function submitGallerySearch(event) {
   event.preventDefault();
   setMessage("galleryMessage", "正在检索...");
   try {
-    const formData = new FormData(event.currentTarget);
-    const res = await fetch("/api/search/gallery", { method: "POST", body: formData });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data?.detail || "检索失败");
-    }
+    const body = normalizeSearchBody(event.currentTarget);
+    const data = await postJson("/api/search/gallery", body);
     setMessage("galleryMessage", `检索完成: ${data.result_count} 条`);
     renderResults(data);
     await refreshIndexStatus("gallery");
@@ -386,14 +502,10 @@ async function submitGallerySearch(event) {
 
 async function submitVideoSearch(event) {
   event.preventDefault();
-  setMessage("videoMessage", "正在检索上传视频...");
+  setMessage("videoMessage", "正在检索视频库...");
   try {
-    const formData = new FormData(event.currentTarget);
-    const res = await fetch("/api/search/uploaded-video", { method: "POST", body: formData });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data?.detail || "视频检索失败");
-    }
+    const body = normalizeSearchBody(event.currentTarget);
+    const data = await postJson("/api/search/gallery", body);
     setMessage("videoMessage", `检索完成: ${data.result_count} 条`);
     renderResults(data);
     await refreshIndexStatus("video");
@@ -410,7 +522,7 @@ async function clearOutputs() {
     if (!res.ok) {
       throw new Error(data?.detail || "清理失败");
     }
-    resultSummary.textContent = "已清理 Web 临时输出";
+    resultSummary.textContent = "已清理检索输出";
     queryPreview.innerHTML = "";
     resultGrid.innerHTML = "";
   } catch (error) {
@@ -422,10 +534,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   initSearchTabs();
   initStatusDock();
   initIndexStatusWatchers();
+  initQueryImagePreviews();
   document.getElementById("refreshStatusBtn")?.addEventListener("click", () => {
     refreshStatus().catch((err) => {
       resultSummary.textContent = err.message || "状态查询失败";
     });
+  });
+  document.getElementById("refreshOptionsBtn")?.addEventListener("click", () => {
+    loadRuntimeOptions()
+      .then(() => {
+        resultSummary.textContent = "文件列表已刷新";
+      })
+      .catch((err) => {
+        resultSummary.textContent = err.message || "文件列表刷新失败";
+      });
   });
   document.getElementById("galleryBuildIndexBtn")?.addEventListener("click", buildGalleryIndex);
   document.getElementById("videoBuildIndexBtn")?.addEventListener("click", buildVideoIndex);
@@ -434,12 +556,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("gallerySearchForm")?.addEventListener("submit", submitGallerySearch);
   document.getElementById("videoSearchForm")?.addEventListener("submit", submitVideoSearch);
   document.getElementById("clearOutputsBtn")?.addEventListener("click", clearOutputs);
-  scheduleIndexStatusRefresh("gallery");
-  scheduleIndexStatusRefresh("video");
 
   try {
+    await loadRuntimeOptions();
     await refreshStatus();
   } catch (error) {
-    resultSummary.textContent = error.message || "状态查询失败";
+    resultSummary.textContent = error.message || "初始化失败";
   }
 });

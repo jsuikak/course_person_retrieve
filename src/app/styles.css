@@ -125,6 +125,14 @@ h2 {
   margin-bottom: 10px;
 }
 
+.tab-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .tab-switch {
   display: inline-flex;
   align-items: center;
@@ -170,6 +178,56 @@ label span {
   color: var(--muted);
 }
 
+.query-image-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.query-image-preview-box {
+  min-height: 112px;
+  margin: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7f9ff;
+}
+
+.query-image-preview-box img {
+  width: 100%;
+  height: 84px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.query-image-preview-box figcaption {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query-image-placeholder {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+.query-image-placeholder.is-error {
+  color: var(--err);
+}
+
 input,
 select,
 button {
@@ -183,6 +241,11 @@ select {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
+}
+
+select:disabled {
+  color: var(--muted);
+  background: #f7f9ff;
 }
 
 button {
@@ -343,11 +406,23 @@ button.secondary {
     align-items: flex-start;
   }
 
+  .tab-controls {
+    justify-content: flex-start;
+  }
+
   .page-grid {
     grid-template-columns: 1fr;
   }
 
   .index-action-row {
     grid-template-columns: 1fr;
+  }
+
+  .query-image-row {
+    grid-template-columns: 1fr;
+  }
+
+  .query-image-preview-box img {
+    height: 160px;
   }
 }

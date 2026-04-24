@@ -1,33 +1,32 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .services import (
+    DATA_RUNTIME_DIR,
     FEATURE_MODES,
     FRONTEND_DIR,
-    IMAGE_EXTENSIONS,
-    VIDEO_EXTENSIONS,
     WEB_OUTPUT_DIR,
     IndexStatusOptions,
     RebuildIndexOptions,
     SearchOptions,
     clear_web_outputs,
     get_index_status,
+    get_runtime_options,
     get_status,
     rebuild_gallery_index,
-    rebuild_uploaded_video_index,
-    save_upload,
+    resolve_query_path,
     search_gallery,
-    search_uploaded_video,
 )
 
 app = FastAPI(title="Course Retrieval Web API")
 
 app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR), check_dir=False), name="frontend")
 app.mount("/outputs-static", StaticFiles(directory=str(WEB_OUTPUT_DIR), check_dir=False), name="outputs_static")
+app.mount("/data-runtime-static", StaticFiles(directory=str(DATA_RUNTIME_DIR), check_dir=False), name="data_runtime_static")
 
 
 class RebuildIndexPayload(BaseModel):
@@ -51,11 +50,29 @@ class RebuildIndexPayload(BaseModel):
 class IndexStatusPayload(BaseModel):
     feature_mode: str = "face"
     index_name: str | None = None
-    gallery_path: str | None = None
-    library_type: str | None = None
-    source_name: str | None = None
+    gallery_path: str = Field(min_length=1)
     person_model: str = "resnet"
     resnet_backbone: str = "resnet18"
+
+
+class SearchPayload(BaseModel):
+    query_path: str = Field(min_length=1)
+    gallery_path: str = Field(min_length=1)
+    feature_mode: str = "face"
+    index_name: str | None = None
+    topk: int = 5
+    device: str | None = None
+    sample_fps: float = 1.0
+    arcface_weight_path: str | None = None
+    yolo_weights: str | None = None
+    yolo_conf: float = 0.25
+    yolo_iou: float = 0.7
+    yolo_max_det: int = 100
+    person_model: str = "resnet"
+    resnet_backbone: str = "resnet18"
+    resnet_pretrained: bool = False
+    resnet_weight_path: str | None = None
+    person_input_size: int = 224
 
 
 @app.exception_handler(ValueError)
@@ -91,6 +108,11 @@ async def api_status() -> dict[str, object]:
     return get_status()
 
 
+@app.get("/api/runtime/options")
+async def api_runtime_options() -> dict[str, object]:
+    return get_runtime_options()
+
+
 @app.post("/api/admin/rebuild-gallery-index")
 async def api_rebuild_gallery_index(payload: RebuildIndexPayload) -> dict[str, object]:
     options = RebuildIndexOptions(**payload.model_dump())
@@ -108,137 +130,27 @@ async def api_index_status(payload: IndexStatusPayload) -> dict[str, object]:
     return get_index_status(options)
 
 
-@app.post("/api/admin/rebuild-uploaded-video-index")
-async def api_rebuild_uploaded_video_index(
-    video: UploadFile = File(...),
-    feature_mode: str = Form("face"),
-    index_name: str | None = Form(None),
-    device: str | None = Form(None),
-    sample_fps: float = Form(1.0),
-    arcface_weight_path: str | None = Form(None),
-    yolo_weights: str | None = Form(None),
-    yolo_conf: float = Form(0.25),
-    yolo_iou: float = Form(0.7),
-    yolo_max_det: int = Form(100),
-    person_model: str = Form("resnet"),
-    resnet_backbone: str = Form("resnet18"),
-    resnet_pretrained: bool = Form(False),
-    resnet_weight_path: str | None = Form(None),
-    person_input_size: int = Form(224),
-) -> dict[str, object]:
-    video_path = await save_upload(video, kind="video", allowed_extensions=VIDEO_EXTENSIONS)
-    options = RebuildIndexOptions(
-        gallery_path=str(video_path),
-        feature_mode=feature_mode,
-        index_name=index_name,
-        device=device,
-        sample_fps=sample_fps,
-        arcface_weight_path=arcface_weight_path,
-        yolo_weights=yolo_weights,
-        yolo_conf=yolo_conf,
-        yolo_iou=yolo_iou,
-        yolo_max_det=yolo_max_det,
-        person_model=person_model,
-        resnet_backbone=resnet_backbone,
-        resnet_pretrained=resnet_pretrained,
-        resnet_weight_path=resnet_weight_path,
-        person_input_size=person_input_size,
-    )
-    summary = rebuild_uploaded_video_index(
-        video_path=video_path,
-        video_name=video.filename or video_path.name,
-        options=options,
-    )
-    summary["status"] = get_status()
-    return summary
-
-
 @app.post("/api/search/gallery")
-async def api_search_gallery(
-    query: UploadFile = File(...),
-    gallery_path: str = Form(...),
-    feature_mode: str = Form("face"),
-    index_name: str | None = Form(None),
-    topk: int = Form(5),
-    device: str | None = Form(None),
-    sample_fps: float = Form(1.0),
-    arcface_weight_path: str | None = Form(None),
-    yolo_weights: str | None = Form(None),
-    yolo_conf: float = Form(0.25),
-    yolo_iou: float = Form(0.7),
-    yolo_max_det: int = Form(100),
-    person_model: str = Form("resnet"),
-    resnet_backbone: str = Form("resnet18"),
-    resnet_pretrained: bool = Form(False),
-    resnet_weight_path: str | None = Form(None),
-    person_input_size: int = Form(224),
-) -> dict[str, object]:
-    query_path = await save_upload(query, kind="query", allowed_extensions=IMAGE_EXTENSIONS)
+async def api_search_gallery(payload: SearchPayload) -> dict[str, object]:
+    query_path = resolve_query_path(payload.query_path)
     options = SearchOptions(
-        feature_mode=feature_mode,
-        index_name=index_name,
-        topk=topk,
-        device=device,
-        sample_fps=sample_fps,
-        arcface_weight_path=arcface_weight_path,
-        yolo_weights=yolo_weights,
-        yolo_conf=yolo_conf,
-        yolo_iou=yolo_iou,
-        yolo_max_det=yolo_max_det,
-        person_model=person_model,
-        resnet_backbone=resnet_backbone,
-        resnet_pretrained=resnet_pretrained,
-        resnet_weight_path=resnet_weight_path,
-        person_input_size=person_input_size,
+        feature_mode=payload.feature_mode,
+        index_name=payload.index_name,
+        topk=payload.topk,
+        device=payload.device,
+        sample_fps=payload.sample_fps,
+        arcface_weight_path=payload.arcface_weight_path,
+        yolo_weights=payload.yolo_weights,
+        yolo_conf=payload.yolo_conf,
+        yolo_iou=payload.yolo_iou,
+        yolo_max_det=payload.yolo_max_det,
+        person_model=payload.person_model,
+        resnet_backbone=payload.resnet_backbone,
+        resnet_pretrained=payload.resnet_pretrained,
+        resnet_weight_path=payload.resnet_weight_path,
+        person_input_size=payload.person_input_size,
     )
-    return search_gallery(query_path=query_path, gallery_path=gallery_path, options=options)
-
-
-@app.post("/api/search/uploaded-video")
-async def api_search_uploaded_video(
-    query: UploadFile = File(...),
-    video: UploadFile = File(...),
-    feature_mode: str = Form("face"),
-    index_name: str | None = Form(None),
-    topk: int = Form(5),
-    device: str | None = Form(None),
-    sample_fps: float = Form(1.0),
-    arcface_weight_path: str | None = Form(None),
-    yolo_weights: str | None = Form(None),
-    yolo_conf: float = Form(0.25),
-    yolo_iou: float = Form(0.7),
-    yolo_max_det: int = Form(100),
-    person_model: str = Form("resnet"),
-    resnet_backbone: str = Form("resnet18"),
-    resnet_pretrained: bool = Form(False),
-    resnet_weight_path: str | None = Form(None),
-    person_input_size: int = Form(224),
-) -> dict[str, object]:
-    query_path = await save_upload(query, kind="query", allowed_extensions=IMAGE_EXTENSIONS)
-    video_path = await save_upload(video, kind="video", allowed_extensions=VIDEO_EXTENSIONS)
-    options = SearchOptions(
-        feature_mode=feature_mode,
-        index_name=index_name,
-        topk=topk,
-        device=device,
-        sample_fps=sample_fps,
-        arcface_weight_path=arcface_weight_path,
-        yolo_weights=yolo_weights,
-        yolo_conf=yolo_conf,
-        yolo_iou=yolo_iou,
-        yolo_max_det=yolo_max_det,
-        person_model=person_model,
-        resnet_backbone=resnet_backbone,
-        resnet_pretrained=resnet_pretrained,
-        resnet_weight_path=resnet_weight_path,
-        person_input_size=person_input_size,
-    )
-    return search_uploaded_video(
-        query_path=query_path,
-        video_path=video_path,
-        video_name=video.filename or video_path.name,
-        options=options,
-    )
+    return search_gallery(query_path=query_path, gallery_path=payload.gallery_path, options=options)
 
 
 @app.delete("/api/admin/clear-web-outputs")
