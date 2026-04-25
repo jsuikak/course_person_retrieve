@@ -12,5 +12,5 @@ data
 大作业资料
 .DS_Store
 outputs
-data_runtime/
+# data_runtime/
 indexes/
