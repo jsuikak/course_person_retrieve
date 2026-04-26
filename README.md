@@ -22,6 +22,23 @@
 
 ## 快速开始（推荐顺序）
 
+### 0) 安装Git LFS
+
+仓库里包含了一个大权重文件，拉取仓库前建议确保安装了Git LFS
+
+包含两个步骤
+1. 安装Git LFS本体
+2. 至少运行一次 `git lfs install` 进行初始化。这一步会安装必要的钩子（hooks）到你的 Git 配置中。
+
+#### 若想先跳过大文件下载
+
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/jsuikak/course_person_retrieve.git
+
+此时大文件只是一个个文本指针。
+
+后续可以手动拉取
+`git lfs pull`
+
 ### 1) 安装依赖
 
 ```bash
